@@ -1,0 +1,117 @@
+diff --git a/b2_new_tests/test_wheel_validations.py b/b2_new_tests/test_wheel_validations.py
+new file mode 100644
+index 0000000..15fae4e
+--- /dev/null
++++ b/b2_new_tests/test_wheel_validations.py
+@@ -0,0 +1,96 @@
++import os
++import pytest
++from packaging.utils import parse_wheel_filename, InvalidWheelFilename
++
++def test_platform_compressed_tags_unsorted_raises():
++    bad = "pyvirtualcam-0.13.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
++    with pytest.raises(InvalidWheelFilename) as e:
++        parse_wheel_filename(bad)
++    assert "unsorted compressed tag set" in str(e.value)
++
++def test_platform_compressed_tags_sorted_ok():
++    good = "pyvirtualcam-0.13.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
++    name, ver, build, tags = parse_wheel_filename(good)
++    assert name == "pyvirtualcam"
++    assert str(ver) == "0.13.0"
++    assert build == ()
++    s = {str(t) for t in tags}
++    assert "cp310-cp310-manylinux2014_x86_64" in s
++    assert "cp310-cp310-manylinux_2_17_x86_64" in s
++
++def test_python_compressed_tags_unsorted_raises():
++    bad = "demo-1.0-py3.py2-none-any.whl"
++    with pytest.raises(InvalidWheelFilename) as e:
++        parse_wheel_filename(bad)
++    assert "unsorted compressed tag set" in str(e.value)
++
++def test_python_compressed_tags_sorted_ok():
++    good = "demo-1.0-py2.py3-none-any.whl"
++    name, ver, build, tags = parse_wheel_filename(good)
++    assert name == "demo"
++    assert str(ver) == "1.0"
++    assert build == ()
++    s = {str(t) for t in tags}
++    assert "py2-none-any" in s
++    assert "py3-none-any" in s
++
++def test_abi_compressed_tags_unsorted_raises():
++    bad = "demo-1.0-cp310-cp310.abi3-manylinux_x86_64.whl"
++    with pytest.raises(InvalidWheelFilename) as e:
++        parse_wheel_filename(bad)
++    assert "unsorted compressed tag set" in str(e.value)
++
++def test_abi_compressed_tags_sorted_ok():
++    good = "demo-1.0-cp310-abi3.cp310-manylinux_x86_64.whl"
++    name, ver, build, tags = parse_wheel_filename(good)
++    assert name == "demo"
++    assert str(ver) == "1.0"
++    assert build == ()
++    s = {str(t) for t in tags}
++    assert "cp310-abi3-manylinux_x86_64" in s
++    assert "cp310-cp310-manylinux_x86_64" in s
++
++def test_ignores_posix_path_components():
++    fname = "dir/sub/pyvirtualcam-0.13.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
++    name, ver, build, tags = parse_wheel_filename(fname)
++    assert name == "pyvirtualcam"
++    assert str(ver) == "0.13.0"
++    assert build == ()
++    s = {str(t) for t in tags}
++    assert "cp310-cp310-manylinux2014_x86_64" in s
++    assert "cp310-cp310-manylinux_2_17_x86_64" in s
++
++def test_ignores_windows_like_path_components():
++    fname = r"dir\\sub\\demo-1.0-py2.py3-none-any.whl"
++    with pytest.raises(InvalidWheelFilename):
++        parse_wheel_filename(fname)
++
++def test_requires_whl_suffix():
++    bad = "demo-1.0-py2.py3-none-any.tar.gz"
++    with pytest.raises(InvalidWheelFilename):
++        parse_wheel_filename(bad)
++
++def test_determinism_repeated_calls_equal_and_env_independent(monkeypatch):
++    good = "demo-1.0-py2.py3-none-any.whl"
++    monkeypatch.setenv("LC_ALL", "C")
++    r1 = parse_wheel_filename(good)
++    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
++    r2 = parse_wheel_filename(good)
++    assert r1 == r2
++    r3 = parse_wheel_filename(good)
++    assert r2 == r3
++
++def test_build_tag_present_tuple_form():
++    good = "demo-1.0-1-cp310-abi3.cp310-manylinux_x86_64.whl"
++    name, ver, build, tags = parse_wheel_filename(good)
++    assert name == "demo"
++    assert str(ver) == "1.0"
++    assert build == (1, "")
++    s = {str(t) for t in tags}
++    assert "cp310-abi3-manylinux_x86_64" in s
++    assert "cp310-cp310-manylinux_x86_64" in s
++diff --git a/test.sh b/test.sh
++new file mode 100755
++index 0000000..c4ed8c3
++--- /dev/null
++++ b/test.sh
++@@ -0,0 +1,14 @@
++#!/bin/bash
++set -e
++case "${1}" in
++  base)
++    pytest -q tests
++    ;;
++  new)
++    pytest -q b2_new_tests
++    ;;
++  *)
++    echo "usage: ./test.sh {base|new}"
++    exit 1
++    ;;
++esac
