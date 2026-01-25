@@ -39,8 +39,9 @@ Explanation of verdict: [paragraph with specifics]
 7. **Avoid rubric jargon** - do not mention R1-R5 or Q1-Q5 or internal checklist codes; write in plain language for a normal solver
 8. **When requesting changes** - include detailed, actionable feedback you'd give to the problem author
 9. **File references** - refer to files by name only (description.md, test.patch, solution.patch, dockerfile); do not mention the `problem/` folder in feedback
-10. **Existing PRs** - mention only if you find a likely matching PR; do not state "no existing PRs" in the verdict
+10. **Existing PRs** - mention only if you find a likely matching PR; do not state "no existing PRs" in the verdict; if a matching PR exists, explain it only in the Explanation of verdict
 11. **Description style** - require behavior-focused problem statements; call out storytelling intros or implementation-level instructions and explain why they should be trimmed
+12. **Avoid second person** - do not use "you" in feedback; write in neutral, impersonal phrasing
 
 ---
 
