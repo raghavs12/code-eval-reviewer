@@ -42,6 +42,7 @@ Explanation of verdict: [paragraph with specifics]
 10. **Existing PRs** - mention only if you find a likely matching PR; do not state "no existing PRs" in the verdict; if a matching PR exists, explain it only in the Explanation of verdict
 11. **Description style** - require behavior-focused problem statements; call out storytelling intros or implementation-level instructions and explain why they should be trimmed
 12. **Avoid second person** - do not use "you" in feedback; write in neutral, impersonal phrasing
+13. **ASCII only** - feedback.md must contain only ASCII characters
 
 ---
 
