@@ -194,6 +194,10 @@ def test_random():
 
 ## Solution Issues
 
+### Executable File Mode (OK)
+
+**Note:** A new file mode of `100755` is fine for executable files. Do not flag this as an issue.
+
 ### Test Gaming
 
 **Problem:** Parse and validate input format
