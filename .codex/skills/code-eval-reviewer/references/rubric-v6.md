@@ -14,13 +14,21 @@ All problem info is inside `problem/`. Do not assume or read from any other fold
 
 ### R1 GitHub Repository
 
+Checking for existing PRs or issues that already solve the same problem is critical and must be done every time.
+
 - URL + commit hash valid
 - Active: at least 1 commit in last 12 months
 - Reputable, production-level, at least 500 stars
 - Main language: TypeScript, JavaScript, or Python
 - Open-source, permissive license (see Allowed Licenses below)
 - GitHub issue URL is provided if available
-- Check for existing GitHub issue or PR solving the same problem
+- Check for existing GitHub issue or PR solving the same problem:
+  - Pull the repo + issue info from `github-setup.md`
+  - Search GitHub PRs (open + merged) for keywords in title/body
+  - Search issues + PRs together with broader keywords
+  - Open the provided issue and look for linked PRs or references
+  - Skim results for anything that looks like the same feature (title/body overlap)
+  - If you find a likely match, open that PR to confirm scope
 - Contact Shipd team if license or reputability is unclear
 
 ### R2 Dockerfile
