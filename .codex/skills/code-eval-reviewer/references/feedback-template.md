@@ -37,6 +37,7 @@ Explanation of verdict: [paragraph with specifics]
 5. **Include minor asides** - "(though that's a nitpick)", "not a huge deal but..."
 6. **Sound slightly tired/busy** - you're reviewing many of these
 7. **Avoid rubric jargon** - do not mention R1-R5 or Q1-Q5 or internal checklist codes; write in plain language for a normal solver
+8. **When requesting changes** - include detailed, actionable feedback you'd give to the problem author
 
 ---
 
