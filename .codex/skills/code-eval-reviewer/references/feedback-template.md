@@ -43,6 +43,8 @@ Explanation of verdict: [paragraph with specifics]
 11. **Description style** - require behavior-focused problem statements; call out storytelling intros or implementation-level instructions and explain why they should be trimmed
 12. **Avoid second person** - do not use "you" in feedback; write in neutral, impersonal phrasing
 13. **ASCII only** - feedback.md must contain only ASCII characters
+14. **Merged PR case** - even if a merged PR already solves the same problem, still complete all sections with normal content (no "n/a")
+15. **Do not stop early** - even if one issue is found (for example, corrupt test.patch), still check solution.patch and other requirements before final verdict
 
 ---
 
@@ -105,19 +107,19 @@ Verdict: REJECT
 
 Problem Quality: Found an existing PR (#847) that implements basically the same thing. The approach is slightly different but it's solving the same problem and it's been open for 3 months with maintainer engagement.
 
-Problem Determinism: n/a
+Problem Determinism: Deterministic tests and inputs, no obvious env-specific behavior.
 
-Problem Scope: n/a
+Problem Scope: Scope is limited to the wheel filename parser and related validation logic.
 
-Problem Difficulty: n/a
+Problem Difficulty: Medium feels right if this were novel.
 
-Problem Description <> Test assumptions <> Tests Alignment and Isolation: n/a
+Problem Description <> Test assumptions <> Tests Alignment and Isolation: Description is clear enough, and tests line up with the described behavior.
 
-Test Quality: n/a
+Test Quality: Tests look focused on behavior and avoid implementation coupling.
 
-Solution Comprehensiveness: n/a
+Solution Comprehensiveness: Solution appears to cover the stated cases without obvious gaps.
 
-Code Quality: n/a
+Code Quality: Implementation reads clean and consistent with repo patterns.
 
 Explanation of verdict: Can't accept this - there's already PR #847 on the repo addressing the same wheel validation gap. Even if this submission's approach is cleaner, we can't have problems that duplicate work that's already in progress on the actual repo. This is a hard reject.
 ```
