@@ -1,5 +1,5 @@
 ---
-name: shipd-reviewer
+name: code-eval-reviewer
 description: Review Shipd MARS project submissions using the problem inputs as source of truth, run Docker verification without prompting, and write structured feedback to feedback.md in the repo root. Follow the 8-stage workflow with R1-R5 requirements and Q1-Q5 quality scoring. Triggers on "review submission", "Shipd review", "MARS review", or when Quick-Setup.txt/Problem-Description.txt/Solution.txt files are provided.
 ---
 
