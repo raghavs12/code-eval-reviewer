@@ -1,6 +1,6 @@
 # Feedback Template
 
-EXACT format for the submission column. Write naturally, like a tired but thorough senior engineer.
+EXACT format for submission feedback. Write naturally, like a tired but thorough senior engineer.
 
 ## Required Fields
 
@@ -31,20 +31,20 @@ Explanation of verdict: [paragraph with specifics]
 ## Human Writing Rules
 
 1. **Vary your openings** - don't start every field the same way
-2. **Use contractions** - "doesn't", "won't", "isn't"  
+2. **Use contractions** - "doesn't", "won't", "isn't"
 3. **Be specific** - cite line numbers, function names, exact text
-4. **Mix sentence lengths** - some short. Others can be a bit longer when you need to explain something.
+4. **Mix sentence lengths** - some short. Others longer when explaining.
 5. **Include minor asides** - "(though that's a nitpick)", "not a huge deal but..."
 6. **Sound slightly tired/busy** - you're reviewing many of these
-7. **Avoid rubric jargon** - do not mention R1-R5 or Q1-Q5 or internal checklist codes; write in plain language for a normal solver
-8. **When requesting changes** - include detailed, actionable feedback you'd give to the problem author
-9. **File references** - do not reference files by name; briefly describe the relevant content instead
-10. **Existing PRs** - mention only if you find a likely matching PR; do not state "no existing PRs" in the verdict; if a matching PR exists, explain it only in the Explanation of verdict
-11. **Description style** - require behavior-focused problem statements; call out storytelling intros or implementation-level instructions and explain why they should be trimmed
-12. **Avoid second person** - do not use "you" in feedback; write in neutral, impersonal phrasing
-13. **ASCII only** - feedback.md must contain only ASCII characters
-14. **Merged PR case** - even if a merged PR already solves the same problem, still complete all sections with normal content (no "n/a")
-15. **Do not stop early** - even if one issue is found (for example, corrupt test.patch), still check solution.patch and other requirements before final verdict
+7. **Avoid rubric jargon** - do NOT mention R1-R5 or Q1-Q5; plain language only
+8. **When requesting changes** - include detailed, actionable feedback
+9. **File references** - do not reference files by name; describe content instead
+10. **Existing PRs** - mention only if you find a match; don't state "no existing PRs"
+11. **Description style** - require behavior-focused statements; call out storytelling intros
+12. **Avoid second person** - no "you"; write in neutral, impersonal phrasing
+13. **ASCII only** - feedback must contain only ASCII characters
+14. **Merged PR case** - still complete all sections with normal content (no "n/a")
+15. **Do not stop early** - complete all sections even if one issue is found
 
 ---
 
@@ -130,7 +130,7 @@ Explanation of verdict: Can't accept this - there's already PR #847 on the repo 
 
 **Good:**
 - "makes sense as a..."
-- "fits how the repo handles..."  
+- "fits how the repo handles..."
 - "nothing wrong with this"
 - "bit verbose but not terrible"
 - "the main issue is..."
@@ -143,9 +143,70 @@ Explanation of verdict: Can't accept this - there's already PR #847 on the repo 
 
 **Avoid:**
 - "comprehensive"
-- "well-structured" 
+- "well-structured"
 - "demonstrates"
 - "This submission..."
 - "The problem effectively..."
 - "appropriately addresses"
 - Starting multiple fields with "The..."
+
+---
+
+## Internal Review Log Template
+
+For documenting steps taken (separate from user-facing feedback):
+
+```
+# Submission Review Log
+
+## Overview
+Date: [Date]
+Reviewer: [Name]
+Submission ID: [ID]
+Repository: [owner/repo]
+Commit: [hash]
+Status: [Accepted/Changes Requested/Rejected]
+
+## Stage Results
+
+### Stage 1: Setup
+- [Notes]
+
+### Stage 2: Problem Analysis
+- Word count: [N]
+- Keywords: [list]
+- [Issues found]
+
+### Stage 3: Repository
+- Stars: [N]
+- License: [type]
+- Existing PRs: [findings]
+
+### Stage 4: Docker & Base Tests
+- Build: [Pass/Fail]
+- Base tests: [Pass/Fail]
+
+### Stage 5: New Tests Pre-Solution
+- New tests: [X% pass - should be 0%]
+
+### Stage 6: Test Quality
+| Aspect | Finding | Severity |
+|--------|---------|----------|
+| ... | ... | ... |
+
+### Stage 7: AI Judge
+- [Agent results and fairness analysis]
+
+### Stage 8: Solution
+- Base tests post-solution: [Pass/Fail]
+- New tests post-solution: [Pass/Fail]
+- [Quality notes]
+
+## Issues Summary
+| # | Category | Severity | Description |
+|---|----------|----------|-------------|
+| 1 | ... | ... | ... |
+
+## Final Verdict
+[Decision with reasoning]
+```

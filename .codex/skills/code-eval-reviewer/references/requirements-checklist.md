@@ -1,25 +1,28 @@
 # Requirements Checklist (R1-R5)
 
-## R1 - GitHub Repository Requirements
+## R1 - GitHub Repository
 
 ### Validation Checks
 | Check | Criteria | How to Verify |
 |-------|----------|---------------|
-| URL Valid | GitHub URL accessible | `curl -s -o /dev/null -w "%{http_code}" <url>` returns 200 |
+| URL Valid | GitHub URL accessible | Check URL loads |
 | Active | ≥1 commit in last 12 months | Check repo commits page |
-| Reputable | ≥500 stars | GitHub API or repo page |
+| Reputable | ≥500 stars | GitHub repo page |
 | Language | TypeScript, JavaScript, or Python | Check repo language stats |
-| License | Permissive (see below) | Check LICENSE file |
+| License | Permissive (see allowed list) | Check LICENSE file |
 | No Existing Fix | No PR/issue already solving this | Search issues/PRs |
 
-### Allowed Licenses
-- MIT License
-- BSD-1-Clause, BSD-2-Clause (all variants), BSD-3-Clause (all variants), BSD-4-Clause (all variants)
-- Apache License 2.0 (all variants)
-- Boost Software License 1.0
-- Creative Commons Attribution (CC-BY 1.0-4.0)
+### Existing PR/Issue Check (CRITICAL)
+1. Pull repo + issue info from github-setup.md or Quick-Setup.txt
+2. Search GitHub PRs (open + merged) for keywords in title/body
+3. Search issues + PRs together with broader keywords
+4. Open provided issue and look for linked PRs or references
+5. Skim results for anything that looks like the same feature
+6. If likely match found, open that PR to confirm scope
 
-## R2 - Dockerfile Requirements
+---
+
+## R2 - Dockerfile
 
 ### Required Structure
 ```dockerfile
@@ -37,17 +40,9 @@ CMD ["/bin/bash"]  # or equivalent entrypoint
 | Entrypoint | Must have `/bin/bash` entrypoint |
 | No Malicious Code | Review for suspicious commands |
 
-### Docker Verification Commands
-```bash
-# Build image
-docker build -t problem-test -f dockerfile .
+---
 
-# Run tests offline
-docker run --network=none problem-test ./test.sh base
-docker run --network=none problem-test ./test.sh new
-```
-
-## R3 - Problem Description Requirements
+## R3 - Problem Description
 
 ### Validation Checks
 | Check | Criteria |
@@ -63,7 +58,9 @@ docker run --network=none problem-test ./test.sh new
 - Copy-pasted from documentation
 - Problem already fixed in recent commits
 
-## R4 - Test Patch Requirements
+---
+
+## R4 - Test Patch
 
 ### Validation Checks
 | Check | Criteria | Command |
@@ -82,7 +79,9 @@ docker run --network=none problem-test ./test.sh new
 ./test.sh new   # Run new/modified tests - MUST FAIL without solution
 ```
 
-## R5 - Solution Patch Requirements
+---
+
+## R5 - Solution Patch
 
 ### Validation Checks
 | Check | Criteria | Command |
@@ -103,3 +102,15 @@ git apply solution.patch
 ./test.sh base  # Must pass
 ./test.sh new   # Must pass
 ```
+
+---
+
+## Quick Reference
+
+| Requirement | Key Question |
+|-------------|--------------|
+| R1 | Is the repo valid and is this problem novel? |
+| R2 | Can we build and run tests offline? |
+| R3 | Is the problem description original and clear? |
+| R4 | Do tests fail without solution and pass baseline? |
+| R5 | Does solution make all tests pass without regression? |
