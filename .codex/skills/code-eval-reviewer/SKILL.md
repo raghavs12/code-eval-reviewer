@@ -9,12 +9,14 @@ description: Review Shipd MARS project submissions using problem folder as sourc
 
 1. **Parse input files** - Quick-Setup.txt, Problem-Description.txt, Solution.txt
 2. **Follow 8-stage review** - Complete ALL stages regardless of issues found
-3. **Use regressive analysis** - Read tests FIRST → extract requirements → check if description matches
+3. **Use regressive analysis** - Read tests FIRST -> extract requirements -> check if description matches
 4. **Run Docker verification** - Execute exact commands without user prompting
 5. **Score R1-R5 requirements** - Pass/Fail for each requirement
 6. **Score Q1-Q5 quality** - 1-3 scale for each quality dimension
-7. **Generate feedback** - Use exact template format, write like a tired senior engineer
-8. **Document steps** - Record every action taken during review
+7. **Use rubric-v6 as source of truth** - See `references/rubric-v6.md` for evaluation details and verdicts
+8. **Calibrate with examples if unsure** - See `references/examples/` (example-1-uploaded)
+9. **Generate feedback** - Use exact template format and write to `feedback.md` in the repo root. Create `feedback.md` if it is not there.
+10. **Document steps** - Record every action taken during review
 
 ## Input Files
 
@@ -183,7 +185,7 @@ docker run -it --network=none shipd/<repo-name>
 | 2 | Partially met, minor gaps |
 | 1 | Not met, significant problems |
 
-See `references/quality-criteria.md` for detailed scoring guide.
+See `references/rubric-v6.md` and `references/quality-criteria.md` for detailed scoring guide.
 
 ---
 
@@ -236,8 +238,10 @@ See `references/feedback-template.md` for exact format.
 ## References
 
 - `references/quality-criteria.md` - Q1-Q5 scoring details
+- `references/rubric-v6.md` - R1-R5/Q1-Q5 rubric and verdict rules
 - `references/requirements-checklist.md` - R1-R5 validation
 - `references/common-issues.md` - Anti-patterns with examples
+- `references/examples/` - Calibration example (example-1-uploaded)
 - `references/feedback-template.md` - Exact output format
 - `references/allowed-licenses.md` - Permissive license list
 - `references/docker-commands.md` - Exact verification commands

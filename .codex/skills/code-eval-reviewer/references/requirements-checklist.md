@@ -19,6 +19,7 @@
 4. Open provided issue and look for linked PRs or references
 5. Skim results for anything that looks like the same feature
 6. If likely match found, open that PR to confirm scope
+7. If license or reputability is unclear, contact Shipd team before accepting
 
 ---
 
@@ -57,6 +58,7 @@ CMD ["/bin/bash"]  # or equivalent entrypoint
 - Generic AI-style writing patterns
 - Copy-pasted from documentation
 - Problem already fixed in recent commits
+- Problem describes already-merged or closed-issue behavior
 
 ---
 
@@ -90,6 +92,7 @@ CMD ["/bin/bash"]  # or equivalent entrypoint
 | No Conflicts | Works with test.patch in any order | Apply both ways |
 | No New Deps | No internet-requiring dependencies | Inspect imports/requirements |
 | Solution Only | No dockerfile changes | Inspect patch content |
+| Limited Test Changes | Only if old test was broken and relevant | Inspect patch content |
 | Base Passes | `./test.sh base` exits 0 with solution | Run with both patches |
 | New Passes | `./test.sh new` exits 0 with solution | Run with both patches |
 | No Malicious | No suspicious code | Code review |

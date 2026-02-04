@@ -73,7 +73,7 @@
 ## Q3 - Problem Precision & Conciseness
 
 ### Criteria
-- **Word count**: Target ~200 words, max 250
+- **Word count**: Target ~200 words, max 250 with justification
 - **No redundancy**: Each sentence adds unique value
 - **Minimal assumptions**: Only non-obvious interface details
 - **No prescriptions**: Describes WHAT not HOW
@@ -83,6 +83,7 @@
 **3: Fully Met**
 - Clearly describes what needs to be done and why
 - Professional formatting, no grammar errors
+- All requirements concrete and understandable
 - Interface definitions ONLY if multiple idiomatic choices exist
 - No unnecessary information
 
@@ -94,6 +95,7 @@
 **1: Not Met**
 - Task significantly unclear or incomplete
 - Important interface specs or context missing
+- Severe grammar errors affecting comprehension
 - Overly verbose with redundant content
 
 ### What to Include vs Exclude

@@ -24,6 +24,25 @@ Solution Comprehensiveness: [1-3 sentences]
 Code Quality: [1-3 sentences]
 
 Explanation of verdict: [paragraph with specifics]
+
+Ratings:
+Problem Quality: [1/2/3]
+Problem Determinism: [1/2/3]
+Problem Scope: [1/2/3]
+Problem Difficulty: [1/2/3]
+Test Quality: [1/2/3]
+Solution Comprehensiveness: [1/2/3]
+Solution Code Quality: [1/2/3]
+Quality Score: [1/2/3]
+Difficulty Score: [1/2/3]
+
+Ratings and Difficulty Notes:
+Test Quality / Score:
+3/3: 90-100% perfect, no issues.
+2/3: Good, but contains very minor/acceptable mistakes.
+1/3: Needs fixes (Do not approve submissions with this rating).
+Difficulty:
+Most submissions are classified as Medium (2/3). It is your discretion whether a task qualifies as Hard (3/3).
 ```
 
 ---

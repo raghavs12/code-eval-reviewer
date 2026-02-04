@@ -1,0 +1,7 @@
+Chamber needs an optional naming policy beyond built-in validation.
+
+Add a persistent root flag --name-policy and env var CHAMBER_NAME_POLICY. If the flag is set (even empty/whitespace), use it; otherwise use the env var when non-empty after trimming. Trim before parsing; empty disables.
+
+With a non-empty policy, apply it during validation of services, services with labels, keys, and tags. Read and parse the current policy during validation (no command hooks), and return any policy parse/evaluation failure as a validation error (no exit). For services with labels, evaluate the base service (before the first :) as kind service and each label segment after the first : (split by :) as kind service_label.
+
+The policy is a boolean expression with true/false, !, &&, ||, parentheses, and calls: when(cond, expr) (true if cond is false), kind("service"|"service_label"|"key"|"tag_key"|"tag_value") (unknown kind is false), prefix, suffix, contains, in, len(op,n) and segments(sep,op,n) with op in =, ==, !=, <, <=, >, >=, glob(pattern) using only * and ? where * can match /, and charset(class) supporting lower, word, alnum, ascii. && and || must short-circuit. Strings support escapes \, ", \n, \r, \t, \xNN. Syntax errors fail at parse time; argument type/arity/value errors occur only if evaluated.

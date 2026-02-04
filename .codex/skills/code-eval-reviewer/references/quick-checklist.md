@@ -1,6 +1,6 @@
 # Quick Review Checklist
 
-Rapid reference for reviews. See detailed files for full criteria.
+Rapid reference for reviews. See `references/rubric-v6.md` and detailed files for full criteria.
 
 ---
 
