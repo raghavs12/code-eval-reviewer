@@ -4,17 +4,17 @@
 
 | Score | Meaning |
 |-------|---------|
-| 3: Fully Met | Meets all criteria, no issues |
-| 2: Partially Met | Minor gaps or issues |
-| 1: Not Met | Significant problems |
+| 3 | Fully met, no issues |
+| 2 | Partially met, minor gaps |
+| 1 | Not met, significant problems |
 
 ---
 
 ## Q1 - Problem Quality
 
 ### Criteria
-- **Realistic**: Feels like a real issue/ticket a developer would encounter
-- **Mergeable**: For features, should be something that could actually be merged
+- **Realistic**: Feels like a real issue/ticket
+- **Mergeable**: Feature could actually be merged
 - **Challenging**: 4-8+ hours for experienced contributor without AI
 - **Verifiable**: Success is objectively measurable
 - **Self-contained**: Not a repo-wide refactor
@@ -22,13 +22,13 @@
 ### Scoring
 
 **3: Fully Met**
-- Addresses genuine gap or bug in the codebase
+- Addresses genuine gap or bug in codebase
 - Clear real-world use case
 - Appropriate scope and difficulty
 - State-of-art AI agents should struggle
 
 **2: Partially Met**
-- Problem is reasonable but edge case or rarely encountered
+- Reasonable but edge case or rarely encountered
 - Difficulty slightly off (too easy or too hard)
 - Some ambiguity in success criteria
 
@@ -52,7 +52,7 @@
 ### Scoring
 
 **3: Fully Met**
-- Tests fully cover behavior in task including edge cases
+- Tests fully cover behavior including edge cases
 - Tests fail at base commit, pass with solution
 - Well-integrated into existing test suite
 - Names and structure follow repo conventions
@@ -96,12 +96,12 @@
 - Task significantly unclear or incomplete
 - Important interface specs or context missing
 - Severe grammar errors affecting comprehension
-- Overly verbose with redundant/unnecessary content
+- Overly verbose with redundant content
 
 ### What to Include vs Exclude
 
 **Include (Test Assumptions):**
-- New function/class names when not obvious from context
+- New function/class names when not obvious
 - New file paths when multiple reasonable choices exist
 - Specific error types/codes if tested
 - CLI flags or API parameters if non-obvious

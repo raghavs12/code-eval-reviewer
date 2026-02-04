@@ -1,0 +1,890 @@
+diff --git a/cmd/root.go b/cmd/root.go
+index 37bdab0..b1b523a 100644
+--- a/cmd/root.go
++++ b/cmd/root.go
+@@ -9,6 +9,7 @@ import (
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
++	"sync"
+ 	"time"
+ 
+ 	"github.com/aws/aws-sdk-go-v2/aws"
+@@ -36,6 +37,7 @@ var (
+ 	backendFlag         string
+ 	backendS3BucketFlag string
+ 	kmsKeyAliasFlag     string
++	namePolicyFlag      string
+ 
+ 	analyticsEnabled  bool
+ 	analyticsWriteKey string
+@@ -97,6 +99,7 @@ func init() {
+ 	)
+ 	RootCmd.PersistentFlags().StringVarP(&backendS3BucketFlag, "backend-s3-bucket", "", "", "bucket for S3 backend; AKA $CHAMBER_S3_BUCKET")
+ 	RootCmd.PersistentFlags().StringVarP(&kmsKeyAliasFlag, "kms-key-alias", "", DefaultKMSKey, "KMS Key Alias for writing and deleting secrets; AKA $CHAMBER_KMS_KEY_ALIAS. This option is currently only supported for the S3-KMS backend.")
++	RootCmd.PersistentFlags().StringVarP(&namePolicyFlag, "name-policy", "", "", "Optional naming policy expression; AKA $CHAMBER_NAME_POLICY")
+ }
+ 
+ // Execute adds all child commands to the root command sets flags appropriately.
+@@ -122,6 +125,9 @@ func validateService(service string) error {
+ 	if store.ReservedService(service) {
+ 		fmt.Fprintf(os.Stderr, "Service name %s is reserved for chamber's own use and will be prohibited in a future version. Please switch to a different service name.\n", service)
+ 	}
++	if err := enforceNamePolicy(namePolicyKindService, service); err != nil {
++		return err
++	}
+ 
+ 	return nil
+ }
+@@ -133,6 +139,9 @@ func validateServiceWithLabel(service string) error {
+ 	if store.ReservedService(service) {
+ 		fmt.Fprintf(os.Stderr, "Service name %s is reserved for chamber's own use and will be prohibited in a future version. Please switch to a different service name.\n", service)
+ 	}
++	if err := enforceNamePolicyForServiceWithLabel(service); err != nil {
++		return err
++	}
+ 
+ 	return nil
+ }
+@@ -141,6 +150,9 @@ func validateKey(key string) error {
+ 	if !validKeyFormat.MatchString(key) {
+ 		return fmt.Errorf("Failed to validate key name '%s'. Only alphanumeric, dashes, full stops and underscores are allowed for key names", key)
+ 	}
++	if err := enforceNamePolicy(namePolicyKindKey, key); err != nil {
++		return err
++	}
+ 	return nil
+ }
+ 
+@@ -151,6 +163,12 @@ func validateTag(key string, value string) error {
+ 	if !validTagValueFormat.MatchString(value) {
+ 		return fmt.Errorf("Failed to validate tag value '%s'. Only 256 alphanumeric, space, and characters +-=._:/@ are allowed for tag values", value)
+ 	}
++	if err := enforceNamePolicy(namePolicyKindTagKey, key); err != nil {
++		return err
++	}
++	if err := enforceNamePolicy(namePolicyKindTagValue, value); err != nil {
++		return err
++	}
+ 	return nil
+ }
+ 
+@@ -266,3 +284,818 @@ func postrun(cmd *cobra.Command, args []string) {
+ 		analyticsClient.Close()
+ 	}
+ }
++
++type namePolicyKind uint8
++
++const (
++	namePolicyKindService namePolicyKind = iota + 1
++	namePolicyKindServiceLabel
++	namePolicyKindKey
++	namePolicyKindTagKey
++	namePolicyKindTagValue
++)
++
++type namePolicyTokenKind uint8
++
++const (
++	namePolicyTokenEOF namePolicyTokenKind = iota + 1
++	namePolicyTokenIdent
++	namePolicyTokenString
++	namePolicyTokenInt
++	namePolicyTokenLParen
++	namePolicyTokenRParen
++	namePolicyTokenComma
++	namePolicyTokenNot
++	namePolicyTokenAnd
++	namePolicyTokenOr
++)
++
++type namePolicyToken struct {
++	kind namePolicyTokenKind
++	text string
++	i64  int64
++}
++
++type namePolicyLexer struct {
++	s string
++	i int
++}
++
++func (l *namePolicyLexer) skipWS() {
++	for l.i < len(l.s) {
++		switch l.s[l.i] {
++		case ' ', '\t', '\r', '\n':
++			l.i++
++		default:
++			return
++		}
++	}
++}
++
++func (l *namePolicyLexer) next() (namePolicyToken, error) {
++	l.skipWS()
++	if l.i >= len(l.s) {
++		return namePolicyToken{kind: namePolicyTokenEOF}, nil
++	}
++
++	switch l.s[l.i] {
++	case '(':
++		l.i++
++		return namePolicyToken{kind: namePolicyTokenLParen, text: "("}, nil
++	case ')':
++		l.i++
++		return namePolicyToken{kind: namePolicyTokenRParen, text: ")"}, nil
++	case ',':
++		l.i++
++		return namePolicyToken{kind: namePolicyTokenComma, text: ","}, nil
++	case '!':
++		l.i++
++		return namePolicyToken{kind: namePolicyTokenNot, text: "!"}, nil
++	case '&':
++		if l.i+1 < len(l.s) && l.s[l.i+1] == '&' {
++			l.i += 2
++			return namePolicyToken{kind: namePolicyTokenAnd, text: "&&"}, nil
++		}
++		return namePolicyToken{}, fmt.Errorf("invalid token")
++	case '|':
++		if l.i+1 < len(l.s) && l.s[l.i+1] == '|' {
++			l.i += 2
++			return namePolicyToken{kind: namePolicyTokenOr, text: "||"}, nil
++		}
++		return namePolicyToken{}, fmt.Errorf("invalid token")
++	case '"':
++		return l.readString()
++	default:
++		b := l.s[l.i]
++		if b >= '0' && b <= '9' {
++			return l.readInt()
++		}
++		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || b == '_' {
++			return l.readIdent()
++		}
++		return namePolicyToken{}, fmt.Errorf("invalid token")
++	}
++}
++
++func (l *namePolicyLexer) readIdent() (namePolicyToken, error) {
++	start := l.i
++	l.i++
++	for l.i < len(l.s) {
++		b := l.s[l.i]
++		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') || b == '_' {
++			l.i++
++			continue
++		}
++		break
++	}
++	return namePolicyToken{kind: namePolicyTokenIdent, text: l.s[start:l.i]}, nil
++}
++
++func (l *namePolicyLexer) readInt() (namePolicyToken, error) {
++	start := l.i
++	var v int64
++	for l.i < len(l.s) {
++		b := l.s[l.i]
++		if b < '0' || b > '9' {
++			break
++		}
++		d := int64(b - '0')
++		if v > (1<<63-1-d)/10 {
++			return namePolicyToken{}, fmt.Errorf("invalid integer")
++		}
++		v = v*10 + d
++		l.i++
++	}
++	return namePolicyToken{kind: namePolicyTokenInt, text: l.s[start:l.i], i64: v}, nil
++}
++
++func (l *namePolicyLexer) readString() (namePolicyToken, error) {
++	if l.i >= len(l.s) || l.s[l.i] != '"' {
++		return namePolicyToken{}, fmt.Errorf("invalid string")
++	}
++	l.i++
++	var b strings.Builder
++	for {
++		if l.i >= len(l.s) {
++			return namePolicyToken{}, fmt.Errorf("invalid string")
++		}
++		ch := l.s[l.i]
++		l.i++
++		if ch == '"' {
++			return namePolicyToken{kind: namePolicyTokenString, text: b.String()}, nil
++		}
++		if ch != '\\' {
++			b.WriteByte(ch)
++			continue
++		}
++		if l.i >= len(l.s) {
++			return namePolicyToken{}, fmt.Errorf("invalid string escape")
++		}
++		esc := l.s[l.i]
++		l.i++
++		switch esc {
++		case '\\':
++			b.WriteByte('\\')
++		case '"':
++			b.WriteByte('"')
++		case 'n':
++			b.WriteByte('\n')
++		case 'r':
++			b.WriteByte('\r')
++		case 't':
++			b.WriteByte('\t')
++		case 'x':
++			if l.i+1 >= len(l.s) {
++				return namePolicyToken{}, fmt.Errorf("invalid string escape")
++			}
++			h1 := l.s[l.i]
++			h2 := l.s[l.i+1]
++			l.i += 2
++			v1, ok1 := namePolicyHexDigit(h1)
++			v2, ok2 := namePolicyHexDigit(h2)
++			if !ok1 || !ok2 {
++				return namePolicyToken{}, fmt.Errorf("invalid string escape")
++			}
++			b.WriteByte(byte(v1<<4 | v2))
++		default:
++			return namePolicyToken{}, fmt.Errorf("invalid string escape")
++		}
++	}
++}
++
++func namePolicyHexDigit(b byte) (uint8, bool) {
++	switch {
++	case b >= '0' && b <= '9':
++		return uint8(b - '0'), true
++	case b >= 'a' && b <= 'f':
++		return uint8(b-'a') + 10, true
++	case b >= 'A' && b <= 'F':
++		return uint8(b-'A') + 10, true
++	default:
++		return 0, false
++	}
++}
++
++type namePolicyArgKind uint8
++
++const (
++	namePolicyArgBool namePolicyArgKind = iota + 1
++	namePolicyArgString
++	namePolicyArgInt
++)
++
++type namePolicyArg struct {
++	kind namePolicyArgKind
++	b    *namePolicyNodeBool
++	s    string
++	i64  int64
++}
++
++type namePolicyNodeBoolKind uint8
++
++const (
++	namePolicyNodeBoolLiteral namePolicyNodeBoolKind = iota + 1
++	namePolicyNodeNot
++	namePolicyNodeAnd
++	namePolicyNodeOr
++	namePolicyNodeCall
++)
++
++type namePolicyNodeBool struct {
++	kind namePolicyNodeBoolKind
++	v    bool
++	a    *namePolicyNodeBool
++	b    *namePolicyNodeBool
++	fn   string
++	args []namePolicyArg
++}
++
++type namePolicyParser struct {
++	l   *namePolicyLexer
++	tok namePolicyToken
++}
++
++func namePolicyParse(s string) (*namePolicyNodeBool, error) {
++	p := &namePolicyParser{l: &namePolicyLexer{s: s}}
++	if err := p.next(); err != nil {
++		return nil, err
++	}
++	n, err := p.parseExpr()
++	if err != nil {
++		return nil, err
++	}
++	if p.tok.kind != namePolicyTokenEOF {
++		return nil, fmt.Errorf("invalid syntax")
++	}
++	return n, nil
++}
++
++func (p *namePolicyParser) next() error {
++	t, err := p.l.next()
++	if err != nil {
++		return err
++	}
++	p.tok = t
++	return nil
++}
++
++func (p *namePolicyParser) parseExpr() (*namePolicyNodeBool, error) {
++	return p.parseOr()
++}
++
++func (p *namePolicyParser) parseOr() (*namePolicyNodeBool, error) {
++	left, err := p.parseAnd()
++	if err != nil {
++		return nil, err
++	}
++	for p.tok.kind == namePolicyTokenOr {
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		right, err := p.parseAnd()
++		if err != nil {
++			return nil, err
++		}
++		left = &namePolicyNodeBool{kind: namePolicyNodeOr, a: left, b: right}
++	}
++	return left, nil
++}
++
++func (p *namePolicyParser) parseAnd() (*namePolicyNodeBool, error) {
++	left, err := p.parseUnary()
++	if err != nil {
++		return nil, err
++	}
++	for p.tok.kind == namePolicyTokenAnd {
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		right, err := p.parseUnary()
++		if err != nil {
++			return nil, err
++		}
++		left = &namePolicyNodeBool{kind: namePolicyNodeAnd, a: left, b: right}
++	}
++	return left, nil
++}
++
++func (p *namePolicyParser) parseUnary() (*namePolicyNodeBool, error) {
++	if p.tok.kind == namePolicyTokenNot {
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		inner, err := p.parseUnary()
++		if err != nil {
++			return nil, err
++		}
++		return &namePolicyNodeBool{kind: namePolicyNodeNot, a: inner}, nil
++	}
++	return p.parsePrimary()
++}
++
++func (p *namePolicyParser) parsePrimary() (*namePolicyNodeBool, error) {
++	switch p.tok.kind {
++	case namePolicyTokenIdent:
++		ident := p.tok.text
++		if ident == "true" || ident == "false" {
++			v := ident == "true"
++			if err := p.next(); err != nil {
++				return nil, err
++			}
++			return &namePolicyNodeBool{kind: namePolicyNodeBoolLiteral, v: v}, nil
++		}
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		if p.tok.kind != namePolicyTokenLParen {
++			return nil, fmt.Errorf("invalid syntax")
++		}
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		var args []namePolicyArg
++		if p.tok.kind != namePolicyTokenRParen {
++			for {
++				arg, err := p.parseArg()
++				if err != nil {
++					return nil, err
++				}
++				args = append(args, arg)
++				if p.tok.kind == namePolicyTokenComma {
++					if err := p.next(); err != nil {
++						return nil, err
++					}
++					if p.tok.kind == namePolicyTokenRParen {
++						return nil, fmt.Errorf("invalid syntax")
++					}
++					continue
++				}
++				break
++			}
++			if p.tok.kind != namePolicyTokenRParen {
++				return nil, fmt.Errorf("invalid syntax")
++			}
++		}
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		return &namePolicyNodeBool{kind: namePolicyNodeCall, fn: ident, args: args}, nil
++	case namePolicyTokenLParen:
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		inner, err := p.parseExpr()
++		if err != nil {
++			return nil, err
++		}
++		if p.tok.kind != namePolicyTokenRParen {
++			return nil, fmt.Errorf("invalid syntax")
++		}
++		if err := p.next(); err != nil {
++			return nil, err
++		}
++		return inner, nil
++	default:
++		return nil, fmt.Errorf("invalid syntax")
++	}
++}
++
++func (p *namePolicyParser) parseArg() (namePolicyArg, error) {
++	switch p.tok.kind {
++	case namePolicyTokenString:
++		s := p.tok.text
++		if err := p.next(); err != nil {
++			return namePolicyArg{}, err
++		}
++		return namePolicyArg{kind: namePolicyArgString, s: s}, nil
++	case namePolicyTokenInt:
++		v := p.tok.i64
++		if err := p.next(); err != nil {
++			return namePolicyArg{}, err
++		}
++		return namePolicyArg{kind: namePolicyArgInt, i64: v}, nil
++	default:
++		n, err := p.parseExpr()
++		if err != nil {
++			return namePolicyArg{}, err
++		}
++		return namePolicyArg{kind: namePolicyArgBool, b: n}, nil
++	}
++}
++
++type namePolicy struct {
++	root *namePolicyNodeBool
++}
++
++type namePolicyEvalContext struct {
++	kind  namePolicyKind
++	value string
++}
++
++func (p *namePolicy) eval(ctx namePolicyEvalContext) (bool, error) {
++	return namePolicyEvalBool(p.root, ctx)
++}
++
++func namePolicyEvalBool(n *namePolicyNodeBool, ctx namePolicyEvalContext) (bool, error) {
++	switch n.kind {
++	case namePolicyNodeBoolLiteral:
++		return n.v, nil
++	case namePolicyNodeNot:
++		v, err := namePolicyEvalBool(n.a, ctx)
++		if err != nil {
++			return false, err
++		}
++		return !v, nil
++	case namePolicyNodeAnd:
++		v, err := namePolicyEvalBool(n.a, ctx)
++		if err != nil {
++			return false, err
++		}
++		if !v {
++			return false, nil
++		}
++		return namePolicyEvalBool(n.b, ctx)
++	case namePolicyNodeOr:
++		v, err := namePolicyEvalBool(n.a, ctx)
++		if err != nil {
++			return false, err
++		}
++		if v {
++			return true, nil
++		}
++		return namePolicyEvalBool(n.b, ctx)
++	case namePolicyNodeCall:
++		return namePolicyEvalCall(n.fn, n.args, ctx)
++	default:
++		return false, fmt.Errorf("invalid syntax")
++	}
++}
++
++func namePolicyEvalCall(fn string, args []namePolicyArg, ctx namePolicyEvalContext) (bool, error) {
++	switch fn {
++	case "when":
++		if len(args) != 2 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		cond, err := namePolicyEvalArgBool(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		if !cond {
++			return true, nil
++		}
++		return namePolicyEvalArgBool(args[1], ctx)
++	case "kind":
++		if len(args) != 1 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		s, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		return namePolicyKindMatches(ctx.kind, s), nil
++	case "prefix":
++		if len(args) != 1 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		s, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		return strings.HasPrefix(ctx.value, s), nil
++	case "suffix":
++		if len(args) != 1 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		s, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		return strings.HasSuffix(ctx.value, s), nil
++	case "contains":
++		if len(args) != 1 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		s, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		return strings.Contains(ctx.value, s), nil
++	case "in":
++		if len(args) < 1 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		for _, a := range args {
++			s, err := namePolicyEvalArgString(a, ctx)
++			if err != nil {
++				return false, err
++			}
++			if ctx.value == s {
++				return true, nil
++			}
++		}
++		return false, nil
++	case "len":
++		if len(args) != 2 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		op, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		n, err := namePolicyEvalArgInt(args[1], ctx)
++		if err != nil {
++			return false, err
++		}
++		return namePolicyCompareInt(int64(len(ctx.value)), op, n)
++	case "segments":
++		if len(args) != 3 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		sep, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		if sep == "" {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		op, err := namePolicyEvalArgString(args[1], ctx)
++		if err != nil {
++			return false, err
++		}
++		n, err := namePolicyEvalArgInt(args[2], ctx)
++		if err != nil {
++			return false, err
++		}
++		count := int64(len(strings.Split(ctx.value, sep)))
++		return namePolicyCompareInt(count, op, n)
++	case "glob":
++		if len(args) != 1 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		pat, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		ok, err := namePolicyGlobMatch(pat, ctx.value)
++		if err != nil {
++			return false, err
++		}
++		return ok, nil
++	case "charset":
++		if len(args) != 1 {
++			return false, fmt.Errorf("invalid arguments")
++		}
++		cs, err := namePolicyEvalArgString(args[0], ctx)
++		if err != nil {
++			return false, err
++		}
++		ok, err := namePolicyCharset(cs, ctx.value)
++		if err != nil {
++			return false, err
++		}
++		return ok, nil
++	default:
++		return false, fmt.Errorf("invalid function")
++	}
++}
++
++func namePolicyEvalArgBool(a namePolicyArg, ctx namePolicyEvalContext) (bool, error) {
++	if a.kind != namePolicyArgBool || a.b == nil {
++		return false, fmt.Errorf("invalid arguments")
++	}
++	return namePolicyEvalBool(a.b, ctx)
++}
++
++func namePolicyEvalArgString(a namePolicyArg, ctx namePolicyEvalContext) (string, error) {
++	if a.kind != namePolicyArgString {
++		return "", fmt.Errorf("invalid arguments")
++	}
++	return a.s, nil
++}
++
++func namePolicyEvalArgInt(a namePolicyArg, ctx namePolicyEvalContext) (int64, error) {
++	if a.kind != namePolicyArgInt {
++		return 0, fmt.Errorf("invalid arguments")
++	}
++	return a.i64, nil
++}
++
++func namePolicyKindMatches(k namePolicyKind, s string) bool {
++	switch s {
++	case "service":
++		return k == namePolicyKindService
++	case "service_label":
++		return k == namePolicyKindServiceLabel
++	case "key":
++		return k == namePolicyKindKey
++	case "tag_key":
++		return k == namePolicyKindTagKey
++	case "tag_value":
++		return k == namePolicyKindTagValue
++	default:
++		return false
++	}
++}
++
++func namePolicyCompareInt(left int64, op string, right int64) (bool, error) {
++	switch op {
++	case "=", "==":
++		return left == right, nil
++	case "!=":
++		return left != right, nil
++	case "<":
++		return left < right, nil
++	case "<=":
++		return left <= right, nil
++	case ">":
++		return left > right, nil
++	case ">=":
++		return left >= right, nil
++	default:
++		return false, fmt.Errorf("invalid arguments")
++	}
++}
++
++func namePolicyGlobMatch(pat string, s string) (bool, error) {
++	if strings.ContainsAny(pat, "[]") {
++		return false, fmt.Errorf("invalid arguments")
++	}
++	pi := 0
++	si := 0
++	starPi := -1
++	starSi := -1
++
++	for si < len(s) {
++		if pi < len(pat) {
++			switch pat[pi] {
++			case '?':
++				pi++
++				si++
++				continue
++			case '*':
++				starPi = pi
++				starSi = si
++				pi++
++				continue
++			default:
++				if pat[pi] == s[si] {
++					pi++
++					si++
++					continue
++				}
++			}
++		}
++		if starPi != -1 {
++			pi = starPi + 1
++			starSi++
++			si = starSi
++			continue
++		}
++		return false, nil
++	}
++
++	for pi < len(pat) && pat[pi] == '*' {
++		pi++
++	}
++	return pi == len(pat), nil
++}
++
++func namePolicyCharset(cs string, s string) (bool, error) {
++	switch cs {
++	case "lower":
++		for i := 0; i < len(s); i++ {
++			b := s[i]
++			if b < 'a' || b > 'z' {
++				return false, nil
++			}
++		}
++		return true, nil
++	case "upper":
++		for i := 0; i < len(s); i++ {
++			b := s[i]
++			if b < 'A' || b > 'Z' {
++				return false, nil
++			}
++		}
++		return true, nil
++	case "alpha":
++		for i := 0; i < len(s); i++ {
++			b := s[i]
++			if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')) {
++				return false, nil
++			}
++		}
++		return true, nil
++	case "alnum":
++		for i := 0; i < len(s); i++ {
++			b := s[i]
++			if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')) {
++				return false, nil
++			}
++		}
++		return true, nil
++	case "word":
++		for i := 0; i < len(s); i++ {
++			b := s[i]
++			if !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_') {
++				return false, nil
++			}
++		}
++		return true, nil
++	case "ascii":
++		for i := 0; i < len(s); i++ {
++			b := s[i]
++			if b < 0x20 || b > 0x7e {
++				return false, nil
++			}
++		}
++		return true, nil
++	default:
++		return false, fmt.Errorf("invalid arguments")
++	}
++}
++
++var namePolicyCache struct {
++	mu  sync.Mutex
++	src string
++	p   *namePolicy
++	err error
++}
++
++func currentNamePolicy() (*namePolicy, error) {
++	rootPflags := RootCmd.PersistentFlags()
++	var src string
++	if rootPflags.Lookup("name-policy") != nil && rootPflags.Changed("name-policy") {
++		src = namePolicyFlag
++	} else {
++		src = os.Getenv("CHAMBER_NAME_POLICY")
++	}
++	src = strings.TrimSpace(src)
++	if src == "" {
++		return nil, nil
++	}
++
++	namePolicyCache.mu.Lock()
++	defer namePolicyCache.mu.Unlock()
++	if namePolicyCache.src == src {
++		return namePolicyCache.p, namePolicyCache.err
++	}
++	root, err := namePolicyParse(src)
++	var pol *namePolicy
++	if err == nil {
++		pol = &namePolicy{root: root}
++	}
++	namePolicyCache.src = src
++	namePolicyCache.p = pol
++	namePolicyCache.err = err
++	return pol, err
++}
++
++var errNamePolicyRejected = errors.New("name policy rejected")
++
++func enforceNamePolicy(kind namePolicyKind, value string) error {
++	pol, err := currentNamePolicy()
++	if err != nil {
++		return err
++	}
++	if pol == nil {
++		return nil
++	}
++	ok, err := pol.eval(namePolicyEvalContext{kind: kind, value: value})
++	if err != nil {
++		return err
++	}
++	if !ok {
++		return errNamePolicyRejected
++	}
++	return nil
++}
++
++func enforceNamePolicyForServiceWithLabel(serviceWithLabel string) error {
++	if err := enforceNamePolicy(namePolicyKindService, namePolicyServiceBase(serviceWithLabel)); err != nil {
++		return err
++	}
++	for _, lab := range namePolicyServiceLabels(serviceWithLabel) {
++		if err := enforceNamePolicy(namePolicyKindServiceLabel, lab); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++func namePolicyServiceBase(serviceWithLabel string) string {
++	if i := strings.IndexByte(serviceWithLabel, ':'); i >= 0 {
++		return serviceWithLabel[:i]
++	}
++	return serviceWithLabel
++}
++
++func namePolicyServiceLabels(serviceWithLabel string) []string {
++	i := strings.IndexByte(serviceWithLabel, ':')
++	if i < 0 || i+1 >= len(serviceWithLabel) {
++		return nil
++	}
++	rest := serviceWithLabel[i+1:]
++	return strings.Split(rest, ":")
++}

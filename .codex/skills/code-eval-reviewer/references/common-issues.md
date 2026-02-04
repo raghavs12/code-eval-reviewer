@@ -1,22 +1,22 @@
 # Common Issues & Anti-Patterns
 
-Based on actual example submissions - use these exact patterns to judge quality.
-
 ## Word Count Benchmarks
 
-| Rating | Words | Example |
-|--------|-------|---------|
-| Exemplar | ~140 | FastAPI response headers |
-| Good | ~200-240 | Pydantic fraction (but too prescriptive) |
-| Needs Improvement | 500+ | Wheel filename parser |
+| Rating | Words | Assessment |
+|--------|-------|------------|
+| Exemplar | ~140 | Minimal, behavior-focused |
+| Acceptable | ~200 | Good balance |
+| Too verbose | 250+ | Needs trimming |
 
 **Target: ~200 words. Above 250 needs strong justification.**
+
+---
 
 ## Problem Description Issues
 
 ### Over-Specification (Too Prescriptive)
 
-**Bad Example (from Example 2 - "Good"):**
+**Bad:**
 ```markdown
 ## Agent Instructions
 1. Fix Fraction Serialization
@@ -24,42 +24,35 @@ Based on actual example submissions - use these exact patterns to judge quality.
    - `model_dump()` --> `Fraction` objects
    - `model_dump_json()` --> strings (e.g., `"1/3"`)
    - Zero fractions serialize as `"0"` instead of `"0/1"`
-   - Support parsing string inputs like `"1/3"`, `"-1/2"`
 ```
 
-**Better (reviewer feedback):**
+**Better:**
 ```markdown
 ## Agent Instructions
 Fraction should serialize consistently with Decimal: objects in Python mode,
-strings in JSON mode. Fraction(4, 6) should become '2/3' when serialized as string.
+strings in JSON mode. Fraction(4, 6) should become '2/3' when serialized.
 ```
 
-**Why:** "A competent developer should be able to figure everything else out"
+**Why:** A competent developer should figure everything else out.
 
 ---
 
-### Redundant/Obvious Information (from Example 3 - "Needs Improvement")
+### Redundant/Obvious Information
 
 These EXACT phrases should be flagged and removed:
 
-**❌ "Valid, sorted inputs must continue to parse exactly as before"**
-- Reviewer: "This is unnecessary" - it's obvious you shouldn't break existing behavior
-
-**❌ "Behavior must be deterministic and independent of environment"**  
-- Implied for any fix, doesn't need stating
-
-**❌ "The validation must occur before tag expansion and must not alter parsing for already valid inputs"**
-- Reviewer: "This is repetitive" - specifies internal implementation timing
-
-**❌ "Do not change how tags are generated or canonicalized; only add the required validation"**
-- Reviewer: "This is unnecessary. Creates confusion by suggesting extra changes that aren't required"
-
-**❌ "Preserve existing public types and exceptions"**
-- Obvious from context
+| Phrase | Why Remove |
+|--------|------------|
+| "Valid, sorted inputs must continue to parse exactly as before" | Obvious - don't break existing behavior |
+| "Behavior must be deterministic and independent of environment" | Implied for any fix |
+| "The validation must occur before tag expansion" | Specifies internal implementation timing |
+| "Do not change how tags are generated; only add validation" | Creates confusion by suggesting extra changes |
+| "Preserve existing public types and exceptions" | Obvious from context |
+| "Maintain backward compatibility" | Always expected unless stated otherwise |
 
 ---
 
-### Specifying Location When Obvious (from Example 3)
+### Specifying Location When Obvious
 
 **Bad:**
 ```markdown
@@ -68,42 +61,52 @@ Location: src/packaging/utils.py
 Public function parse_wheel_filename:
 ```
 
-**Reviewer feedback:** "This is too detailed. Based on the codebase context, this function should be locatable just given 'The wheel filename parser'"
-
-**Better:** Just say "the wheel filename parser" - devs can find it
+**Better:** Just say "the wheel filename parser" - devs can find it.
 
 ---
 
-### Specifying Return Values That Already Exist (from Example 3)
+### Specifying Return Values That Already Exist
 
 **Bad:**
 ```markdown
 Return values:
-Project name: canonicalized string as currently produced by the module.
-Version: an instance of packaging.version.Version parsed from the version field.
+Project name: canonicalized string as currently produced.
+Version: an instance of packaging.version.Version.
 Build: when present, a tuple[int, str]...
-Tags: a frozenset[Tag] representing all expanded tags...
 ```
 
-**Reviewer feedback:** "Developers should be able to already determine this from the existing code, since this part is not changing"
+**Fix:** Delete entire section - restates what function already returns.
 
-**Fix:** Delete entire section - it's restating what the function already returns
+---
+
+### Implementation Leakage
+
+**Bad:**
+```
+Fix a bug in shipd_reviewer where it throws an error by correcting 
+the logic of parsing to use string parser instead of integer parser.
+```
+
+**Good:**
+```
+Fix the issue in shipd_reviewer function as it's throwing error on passing username.
+```
+
+**Why:** The solver (AI) should determine HOW to implement.
 
 ---
 
 ## Test Issues
 
-### Implementation-Coupled Tests (from Example 3)
+### Implementation-Coupled Tests
 
 **Bad - checking exact error substring:**
 ```python
 def test_error_message():
     with pytest.raises(InvalidWheelFilename) as e:
         parse_wheel_filename(bad_input)
-    assert "unsorted compressed tag set" in str(e.value)  # ❌ Exact string!
+    assert "unsorted compressed tag set" in str(e.value)  # ❌
 ```
-
-**Reviewer feedback:** "I would rather have the tests not check for a given substring. There can be enough test cases to ensure the function is treating all valid and invalid inputs correctly without specifically checking for this."
 
 **Better:**
 ```python
@@ -117,32 +120,6 @@ def test_rejects_invalid_input():
 
 ---
 
-### Good Test Example (from Example 1 - Exemplar)
-
-```python
-def test_response_headers_validation_error():
-    """Test that invalid response headers raise validation errors"""
-    app = FastAPI()
-
-    @app.get("/items", response_headers=ResponseHeaders)
-    def get_items():
-        response = JSONResponse(content={"items": ["item1"]})
-        response.headers["X-Rate-Limit"] = "-5"  # Invalid: should be >= 0
-        return response
-
-    client = TestClient(app)
-    with pytest.raises(ResponseValidationError):
-        client.get("/items")
-```
-
-**Why this is good:**
-- Tests behavior (invalid header raises error)
-- Doesn't check exact error message
-- Clear setup and assertion
-- Follows repo conventions
-
----
-
 ### Tests That Can Be Gamed
 
 **Bad:**
@@ -153,7 +130,7 @@ def test_handles_special_case():
     # Only two specific inputs tested
 ```
 
-**Why:** Can be passed by hardcoding: `if input == "test_input_1": return "expected_1"`
+**Why:** Can be passed by: `if input == "test_input_1": return "expected_1"`
 
 **Better:** Test general behavior with varied inputs, edge cases.
 
@@ -181,10 +158,7 @@ def test_timing():
     start = time.time()
     result = slow_operation()
     assert time.time() - start < 1.0  # Flaky on slow machines
-```
 
-**Bad:**
-```python
 def test_random():
     result = generate_random_id()
     assert len(result) == 10  # May fail if randomness changes
@@ -192,11 +166,44 @@ def test_random():
 
 ---
 
+### Weak Assertions
+
+**Problem:** `expectErr` helpers that only check if error occurred, not content.
+
+```go
+expectErr := func(t *testing.T, kind string, err error) {
+    if err == nil {
+        t.Fatalf("expected error for %s, got ok", kind)
+    }
+}
+```
+
+**Severity:** Minor if matches repo pattern, Critical if repo uses specific assertions.
+
+---
+
+### Hidden Requirements
+
+Tests that validate behavior NOT mentioned in problem description.
+
+**Detection:** Compare test assertions against explicit requirements. Any test without corresponding requirement is a surprise test.
+
+**Fix:** Either add requirement to problem OR remove test.
+
+---
+
+### AI Traces in Tests
+
+If test file has comments but similar repo files don't use comments = AI indicator.
+
+Check for:
+- Style inconsistencies with existing tests
+- Generic variable names
+- Over-documented obvious code
+
+---
+
 ## Solution Issues
-
-### Executable File Mode (OK)
-
-**Note:** A new file mode of `100755` is fine for executable files. Do not flag this as an issue.
 
 ### Test Gaming
 
@@ -205,12 +212,11 @@ def test_random():
 **Bad Solution:**
 ```python
 def validate(input):
-    # Hardcoded for test cases
     if input == "test_case_1":
         return True
     if input == "test_case_2":
         return False
-    # ... actual logic missing
+    # actual logic missing
 ```
 
 ---
@@ -226,10 +232,6 @@ class ValidationStrategy(ABC):
     def validate(self, input): pass
 
 class StringValidator(ValidationStrategy):
-    def validate(self, input):
-        return len(input) > 0
-
-class ValidatorFactory:
     # ... 100 lines of over-engineering
 ```
 
@@ -250,6 +252,62 @@ def process(data):
 
 ---
 
+### Dead Code After Changes
+
+If solution adds new methods that replace old ones, old methods should be removed if now unused.
+
+---
+
+### Hardcoded Values
+
+**Bad:**
+```go
+if userCount > 100 {
+    return "large"
+}
+```
+
+**Good:**
+```go
+if userCount > threshold {
+    return "large"
+}
+```
+
+---
+
+## AI Judge Analysis
+
+### When All Agents Fail for Same Reason
+
+**Critical warning sign** of potential unfairness:
+- Vague problem description
+- Hidden requirements in tests
+- Tricky wording / non-determinism
+- Inconsistent casing (X-Death vs x-death)
+
+**Action:** Investigate root cause before accepting/rejecting.
+
+### Don't Trust Tags Blindly
+
+Tags like GOOD/BAD or FAIL_UNDOCUMENTED_REQUIREMENT may be inaccurate.
+
+**Always verify:**
+- Read the actual failure reason
+- Check if failure is due to legitimate difficulty vs unfairness
+- Confirm "undocumented requirement" is actually undocumented
+
+### Fair vs Unfair Failures
+
+| Fair Failure | Unfair Failure |
+|--------------|----------------|
+| Agent misunderstood clearly stated requirement | Requirement not stated or inferable |
+| Agent made implementation error | Tricky casing/naming not specified |
+| Problem is legitimately complex | Hidden test requirements |
+| Agent used wrong approach | Ambiguous wording with multiple interpretations |
+
+---
+
 ## Verdict Decision Guide
 
 ### REJECT If:
@@ -257,14 +315,13 @@ def process(data):
 - Made-up nonsensical feature
 - Solution is trivial (< 2 lines)
 - Tests can be passed without solving problem
-- Fundamentally flawed concept
 
 ### REQUEST CHANGE If:
 - Description too verbose (can be trimmed)
 - Missing test coverage for stated requirements
 - Over-specified technical details
-- Minor alignment issues between description and tests
-- Code quality issues that are fixable
+- Minor alignment issues
+- Fixable code quality issues
 
 ### ACCEPT If:
 - All R1-R5 requirements pass
@@ -289,7 +346,6 @@ def process(data):
 **Good:** "Line 45: `assert 'unsorted' in str(e)` - remove this assertion, just check exception type"
 
 ### Prioritize
-List issues in order of importance:
 1. Blockers (must fix)
 2. Should fix (quality improvement)
 3. Nice to have (minor polish)

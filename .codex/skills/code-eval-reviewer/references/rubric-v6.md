@@ -2,13 +2,11 @@
 
 ## Data Format
 
-- **Environment**: GitHub repo URL + commit hash
-- **Dockerfile**: `problem/dockerfile`
-- **Problem**: problem description (task brief, developer instructions, test assumptions). Sections may be named differently or omitted.
-- **Test patch**: `problem/test.patch`
-- **Solution patch**: `problem/solution.patch`
+- **Quick-Setup.txt**: Repo URL, commit hash, test patch, Dockerfile, test.sh
+- **Problem-Description.txt**: Task brief, requirements, test assumptions
+- **Solution.txt**: Solution patch (git diff format)
 
-All problem info is inside `problem/`. Do not assume or read from any other folder.
+All problem info is inside these files. Do not assume or read from any other folder.
 
 ## R - Requirements (review order)
 
@@ -20,10 +18,10 @@ Checking for existing PRs or issues that already solve the same problem is criti
 - Active: at least 1 commit in last 12 months
 - Reputable, production-level, at least 500 stars
 - Main language: TypeScript, JavaScript, or Python
-- Open-source, permissive license (see Allowed Licenses below)
+- Open-source, permissive license (see `references/allowed-licenses.md`)
 - GitHub issue URL is provided if available
 - Check for existing GitHub issue or PR solving the same problem:
-  - Pull the repo + issue info from `github-setup.md`
+  - Pull the repo + issue info from Quick-Setup.txt
   - Search GitHub PRs (open + merged) for keywords in title/body
   - Search issues + PRs together with broader keywords
   - Open the provided issue and look for linked PRs or references
@@ -137,53 +135,3 @@ Checking for existing PRs or issues that already solve the same problem is criti
 
 **Tests:**
 - `assert "exact string" in str(error)` -> just check exception type
-
-## Allowed Licenses
-
-- MIT License (MIT)
-- BSD-1-Clause
-- BSD 2-Clause "Simplified" License (BSD-2-Clause)
-- BSD-2-Clause-Flex
-- BSD 2-Clause FreeBSD License (BSD-2-Clause-FreeBSD)
-- BSD-2-Clause-Modification
-- BSD-2-Clause Plus Patent License (BSD-2-Clause-Patent)
-- BSD 2-Clause with views sentence (BSD-2-Clause-Views)
-- BSD 3-Clause "New" or "Revised" License (BSD-3-Clause)
-- BSD with attribution (BSD-3-Clause-Attribution)
-- BSD-3-Clause-EricHeitz
-- BSD-3-Clause-HealthLevelSeven
-- Lawrence Berkeley National Labs BSD variant license (BSD-3-Clause-LBNL)
-- BSD-3-Clause-Modification
-- BSD-3-Clause-OpenMPI
-- BSD-3-Clause-plus-CMU-Attribution
-- BSD-3-Clause-plus-Paul-Mackerras-Attribution
-- BSD-3-Clause-plus-Tommi-Komulainen-Attribution
-- BSD 4-Clause "Original" or "Old" License (BSD-4-Clause)
-- BSD-4-Clause-Argonne
-- BSD-4-Clause-Atmel
-- BSD-4-Clause-Giffin
-- BSD 4-Clause PC/SC Lite for Suse (BSD-4-Clause-PC-SC-Lite)
-- BSD-4-Clause-Plus-Modification-Notice
-- BSD-4-Clause (University of California-Specific) (BSD-4-Clause-UC)
-- BSD-4-Clause-Visigoth
-- BSD-4-Clause-Vocal
-- BSD-4-Clause (Wasabi-Specific) (BSD-4-Clause-Wasabi)
-- BSD 4.3 TAHOE License (BSD-4.3TAHOE)
-- BSD-5-Clause
-- BSD-FatFs
-- BSD-Mixed-2-Clause-And-3-Clause
-- BSD Protection License (BSD-Protection)
-- BSD Source Code Attribution (BSD-Source-Code)
-- Boost Software License 1.0 (BSL-1.0)
-- BLAS
-- GNU-All-permissive-Copying-License
-- Apache License 2.0 (Apache-2.0)
-- Apache-2.0-Modified
-- Apache-with-LLVM-Exception
-- Apache-with-Runtime-Exception
-- BSD-2-Clause Plus Patent License (BSD-2-Clause-Patent)
-- Creative Commons Attribution 1.0 Generic (CC-BY-1.0)
-- Creative Commons Attribution 2.0 Generic (CC-BY-2.0)
-- Creative Commons Attribution 2.5 Generic (CC-BY-2.5)
-- Creative Commons Attribution 3.0 Unported (CC-BY-3.0)
-- Creative Commons Attribution 4.0 International (CC-BY-4.0)
