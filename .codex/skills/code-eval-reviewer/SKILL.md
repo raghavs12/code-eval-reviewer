@@ -1,6 +1,6 @@
 ---
 name: shipd-reviewer
-description: Review Shipd MARS project submissions using problem folder as source of truth, run Docker verification without prompting, and produce structured feedback. Follows 8-stage workflow with R1-R5 requirements and Q1-Q5 quality scoring. Triggers on "review submission", "Shipd review", "MARS review", or when Quick-Setup.txt/Problem-Description.txt/Solution.txt files are provided.
+description: Review Shipd MARS project submissions using the problem inputs as source of truth, run Docker verification without prompting, and write structured feedback to feedback.md in the repo root. Follow the 8-stage workflow with R1-R5 requirements and Q1-Q5 quality scoring. Triggers on "review submission", "Shipd review", "MARS review", or when Quick-Setup.txt/Problem-Description.txt/Solution.txt files are provided.
 ---
 
 # Shipd MARS Reviewer
@@ -16,7 +16,8 @@ description: Review Shipd MARS project submissions using problem folder as sourc
 7. **Use rubric-v6 as source of truth** - See `references/rubric-v6.md` for evaluation details and verdicts
 8. **Calibrate with examples if unsure** - See `references/examples/` (example-1-uploaded)
 9. **Generate feedback** - Use exact template format and write to `feedback.md` in the repo root. Create `feedback.md` if it is not there.
-10. **Document steps** - Record every action taken during review
+10. **Write review log** - Write `review_log.md` in the repo root using `references/examples/example-1-uploaded/Submission Review Log.md` as the template.
+11. **Document steps** - Record every action taken during review
 
 ## Input Files
 
@@ -241,7 +242,7 @@ See `references/feedback-template.md` for exact format.
 - `references/rubric-v6.md` - R1-R5/Q1-Q5 rubric and verdict rules
 - `references/requirements-checklist.md` - R1-R5 validation
 - `references/common-issues.md` - Anti-patterns with examples
-- `references/examples/` - Calibration example (example-1-uploaded)
+- `references/examples/` - Calibration example and review log template (example-1-uploaded)
 - `references/feedback-template.md` - Exact output format
 - `references/allowed-licenses.md` - Permissive license list
 - `references/docker-commands.md` - Exact verification commands
