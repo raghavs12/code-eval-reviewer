@@ -66,13 +66,14 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 
 **Checklist:**
 - [ ] GitHub URL + commit valid
-- [ ] Active: ≥1 commit in last 12 months
-- [ ] Reputable: ≥500 stars
+- [ ] Active: ???1 commit in last 12 months
+- [ ] Reputable: ???500 stars
 - [ ] Language: TypeScript, JavaScript, Python, Go, or Rust
 - [ ] License: Permissive (see `references/allowed-licenses.md`)
-- [ ] No existing PR/issue solving same problem
+- [ ] If an issue already exists for the same problem, that is acceptable and does not need to be mentioned in the description
+- [ ] If there is an open PR or merged PR that fixes the same issue/problem, reject immediately
 
-**Critical:** Search GitHub PRs (open + merged) and issues for keywords. Open provided issue and check for linked PRs.
+**Critical:** Search GitHub PRs (open + merged) and issues for keywords. Open the issue (if provided) and check whether it is marked fixed/resolved and whether linked PRs exist. If any open or merged PR fixes the same problem, stop and reject.
 
 ---
 

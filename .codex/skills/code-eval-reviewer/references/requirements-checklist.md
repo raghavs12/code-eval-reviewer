@@ -10,16 +10,19 @@
 | Reputable | ≥500 stars | GitHub repo page |
 | Language | TypeScript, JavaScript, Python, Go, or Rust | Check repo language stats |
 | License | Permissive (see allowed list) | Check LICENSE file |
-| No Existing Fix | No PR/issue already solving this | Search issues/PRs |
+| No Existing Fix | No open or merged PR already solving this | Search issues/PRs |
 
 ### Existing PR/Issue Check (CRITICAL)
 1. Pull repo + issue info from github-setup.md or Quick-Setup.txt
 2. Search GitHub PRs (open + merged) for keywords in title/body
 3. Search issues + PRs together with broader keywords
 4. Open provided issue and look for linked PRs or references
-5. Skim results for anything that looks like the same feature
-6. If likely match found, open that PR to confirm scope
-7. If license or reputability is unclear, contact Shipd team before accepting
+5. In the issue, check whether it is marked fixed/resolved (labels, closing notes, linked PRs)
+6. Skim results for anything that looks like the same feature
+7. If likely match found, open that PR to confirm scope
+8. If an issue already exists for the same problem, that is acceptable and does not need to be mentioned in the description
+9. If there is an open PR or merged PR that fixes the same issue/problem, reject immediately
+10. If license or reputability is unclear, contact Shipd team before accepting
 
 ---
 
@@ -52,7 +55,7 @@ CMD ["/bin/bash"]  # or equivalent entrypoint
 | Original | Not AI-generated, not plagiarized |
 | Not Malicious | No harmful content |
 | No Existing Fix | GitHub issue not closed, no open PR |
-| Issue URL | Provided if available |
+| Issue URL | Optional; not required to be mentioned in the description |
 
 ### Red Flags
 - Generic AI-style writing patterns

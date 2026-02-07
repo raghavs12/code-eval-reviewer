@@ -19,14 +19,15 @@ Checking for existing PRs or issues that already solve the same problem is criti
 - Reputable, production-level, at least 500 stars
 - Main language: TypeScript, JavaScript, Python, Go, or Rust
 - Open-source, permissive license (see `references/allowed-licenses.md`)
-- GitHub issue URL is provided if available
+- GitHub issue URL is optional; it does not need to be mentioned in the description if it already exists
 - Check for existing GitHub issue or PR solving the same problem:
   - Pull the repo + issue info from Quick-Setup.txt
   - Search GitHub PRs (open + merged) for keywords in title/body
   - Search issues + PRs together with broader keywords
-  - Open the provided issue and look for linked PRs or references
+  - Open the provided issue and check if it is marked fixed/resolved; look for linked PRs or references
   - Skim results for anything that looks like the same feature (title/body overlap)
   - If you find a likely match, open that PR to confirm scope
+  - If there is an open PR or merged PR that fixes the same issue/problem, reject immediately
 - Contact Shipd team if license or reputability is unclear
 
 ### R2 Dockerfile
@@ -42,7 +43,7 @@ Checking for existing PRs or issues that already solve the same problem is criti
 
 - UTF-8 text
 - Not AI generated, not malicious, not plagiarized
-- GitHub Issue URL provided if available
+- GitHub Issue URL is optional; not required to be mentioned in the description
 - Must not describe problems already fixed (closed issue, existing PR, etc)
 
 ### R4 Test
