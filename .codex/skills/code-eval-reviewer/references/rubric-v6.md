@@ -17,7 +17,7 @@ Checking for existing PRs or issues that already solve the same problem is criti
 - URL + commit hash valid
 - Active: at least 1 commit in last 12 months
 - Reputable, production-level, at least 500 stars
-- Main language: TypeScript, JavaScript, or Python
+- Main language: TypeScript, JavaScript, Python, Go, or Rust
 - Open-source, permissive license (see `references/allowed-licenses.md`)
 - GitHub issue URL is provided if available
 - Check for existing GitHub issue or PR solving the same problem:

@@ -8,7 +8,7 @@
 | URL Valid | GitHub URL accessible | Check URL loads |
 | Active | ≥1 commit in last 12 months | Check repo commits page |
 | Reputable | ≥500 stars | GitHub repo page |
-| Language | TypeScript, JavaScript, or Python | Check repo language stats |
+| Language | TypeScript, JavaScript, Python, Go, or Rust | Check repo language stats |
 | License | Permissive (see allowed list) | Check LICENSE file |
 | No Existing Fix | No PR/issue already solving this | Search issues/PRs |
 

@@ -8,7 +8,8 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 ## Workflow Overview
 
 1. **Parse input files** - Quick-Setup.txt, Problem-Description.txt, Solution.txt
-2. **Follow 8-stage review** - Complete ALL stages regardless of issues found
+2. **Check similarity first** - If multiple problem descriptions are provided, run the similarity prompt below before any other review steps. If any problem is similar, stop and tell the user. Do not proceed.
+3. **Follow 8-stage review** - Complete ALL stages regardless of issues found
 3. **Use regressive analysis** - Read tests FIRST -> extract requirements -> check if description matches
 4. **Run Docker verification** - Execute exact commands without user prompting
 5. **Score R1-R5 requirements** - Pass/Fail for each requirement
@@ -35,7 +36,7 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 
 **Actions:**
 1. Parse Quick-Setup.txt to extract repo URL, commit, patches
-2. Check for duplicate submissions (similarity scores)
+2. Check for duplicate submissions (similarity scores). If similar, stop and tell the user. Do not proceed.
 3. Check for multiple solutions (prioritize author's)
 
 **Document:** Setup status, duplicate check results
@@ -67,7 +68,7 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 - [ ] GitHub URL + commit valid
 - [ ] Active: ≥1 commit in last 12 months
 - [ ] Reputable: ≥500 stars
-- [ ] Language: TypeScript, JavaScript, or Python
+- [ ] Language: TypeScript, JavaScript, Python, Go, or Rust
 - [ ] License: Permissive (see `references/allowed-licenses.md`)
 - [ ] No existing PR/issue solving same problem
 
@@ -235,6 +236,38 @@ See `references/feedback-template.md` for exact format.
 4. **Verify claims** - Prove issues with evidence, line numbers
 5. **Specific fixes** - Include exact edits required
 6. **Prioritize fairness** - Hidden requirements = unfair
+
+## Similarity Prompt
+
+Use this prompt when multiple problem descriptions are provided. If any similarity is detected, stop and tell the user. Do not proceed with the review.
+
+```
+Analyze the overlap between the following problem statements and report quantitative similarity findings across three dimensions:
+
+Behavioural Match Percentage
+
+Implementation-Specific Match Percentage
+
+Requirement-Specific Match Percentage
+
+For each dimension:
+Clearly list shared vs divergent aspects.
+
+Use concrete counts (for example 5/7, 4/8) to justify percentages.
+
+Call out unique or scope-expanding requirements separately.
+
+Provide a short interpretation explaining what the percentage implies (same problem, partial overlap, or different scope).
+
+P1:
+[Paste P1]
+
+P2:
+[Paste P2]
+
+P3:
+[Paste P3]
+```
 
 ## References
 
