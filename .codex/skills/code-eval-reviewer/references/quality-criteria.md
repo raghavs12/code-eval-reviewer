@@ -73,7 +73,7 @@
 ## Q3 - Problem Precision & Conciseness
 
 ### Criteria
-- **Word count**: Target ~200 words, max 250 with justification
+- **Word count**: <=200 words preferred; <100 is acceptable if complete; >200 needs trimming
 - **No redundancy**: Each sentence adds unique value
 - **Minimal assumptions**: Only non-obvious interface details
 - **No prescriptions**: Describes WHAT not HOW

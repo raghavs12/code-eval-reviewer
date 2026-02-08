@@ -116,9 +116,9 @@ Checking for existing PRs or issues that already solve the same problem is criti
 
 | Rating | Words | Technical Requirements |
 |--------|-------|----------------------|
-| Exemplar | ~140 | Empty or minimal |
-| Acceptable | ~200 | Only non-obvious items |
-| Too verbose | 250+ | Needs trimming |
+| Exemplar | <100 | Minimal, behavior-focused, no hidden assumptions |
+| Acceptable | 100-200 | Only non-obvious items |
+| Too verbose | >200 | Needs trimming |
 
 ## Verdict Decision
 

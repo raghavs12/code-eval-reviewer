@@ -47,7 +47,7 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 
 **Actions:**
 1. Read problem thoroughly, identify keywords
-2. Count words (target ~200, max 250)
+2. Count words (<=200 preferred; <100 is acceptable if complete; >200 needs trimming)
 3. Check for over-specification and redundancy
 4. Determine if self-created or based on GitHub issue
 
