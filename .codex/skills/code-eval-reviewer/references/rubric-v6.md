@@ -10,7 +10,7 @@ All problem info is inside these files. Do not assume or read from any other fol
 
 ## R - Requirements (review order)
 
-### R1 GitHub Repository
+### R1 GitHub Repository (Do this first. If it fails, reject immediately and still write feedback.md)
 
 Checking for existing PRs or issues that already solve the same problem is critical and must be done every time.
 

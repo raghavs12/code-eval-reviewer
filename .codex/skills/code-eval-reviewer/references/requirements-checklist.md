@@ -1,6 +1,6 @@
 # Requirements Checklist (R1-R5)
 
-## R1 - GitHub Repository
+## R1 - GitHub Repository (Do this first. If it fails, reject immediately and still write feedback.md)
 
 ### Validation Checks
 | Check | Criteria | How to Verify |

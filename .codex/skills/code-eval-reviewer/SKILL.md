@@ -9,7 +9,8 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 
 1. **Parse input files** - Quick-Setup.txt, Problem-Description.txt, Solution.txt
 2. **Check similarity first** - If multiple problem descriptions are provided, run the similarity prompt below before any other review steps. If any problem is similar, stop and tell the user. Do not proceed.
-3. **Follow 8-stage review** - Complete ALL stages regardless of issues found
+3. **Validate repository early** - If repo validation fails (stars, license, maintenance, URL, language), reject immediately and still write `feedback.md`. Do not proceed.
+4. **Follow 8-stage review** - Complete ALL stages regardless of issues found
 3. **Use regressive analysis** - Read tests FIRST -> extract requirements -> check if description matches
 4. **Run Docker verification** - Execute exact commands without user prompting
 5. **Score R1-R5 requirements** - Pass/Fail for each requirement
@@ -37,7 +38,8 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 **Actions:**
 1. Parse Quick-Setup.txt to extract repo URL, commit, patches
 2. Check for duplicate submissions (similarity scores). If similar, stop and tell the user. Do not proceed.
-3. Check for multiple solutions (prioritize author's)
+3. Start repository validation (stars, license, maintenance, URL, language). If it fails, reject immediately and still write `feedback.md`. Do not proceed.
+4. Check for multiple solutions (prioritize author's)
 
 **Document:** Setup status, duplicate check results
 
@@ -62,7 +64,7 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 
 ---
 
-### Stage 3: Repository Verification (R1)
+### Stage 3: Repository Verification (R1) - MUST be done first. If it fails, reject immediately and still write `feedback.md`.
 
 **Checklist:**
 - [ ] GitHub URL + commit valid
