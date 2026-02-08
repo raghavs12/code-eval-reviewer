@@ -24,7 +24,7 @@ Checking for existing PRs or issues that already solve the same problem is criti
   - Pull the repo + issue info from Quick-Setup.txt
   - Search GitHub PRs (open + merged) for keywords in title/body
   - Search issues + PRs together with broader keywords
-  - Open the provided issue and check if it is marked fixed/resolved; look for linked PRs or references
+  - Open the provided issue and check if it is closed/resolved; if closed, reject immediately. Also check for linked PRs or references
   - Skim results for anything that looks like the same feature (title/body overlap)
   - If you find a likely match, open that PR to confirm scope
   - If there is an open PR or merged PR that fixes the same issue/problem, reject immediately

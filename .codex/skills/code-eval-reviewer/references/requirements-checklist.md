@@ -17,7 +17,7 @@
 2. Search GitHub PRs (open + merged) for keywords in title/body
 3. Search issues + PRs together with broader keywords
 4. Open provided issue and look for linked PRs or references
-5. In the issue, check whether it is marked fixed/resolved (labels, closing notes, linked PRs)
+5. In the issue, check whether it is closed/resolved (labels, closing notes, linked PRs). If closed, reject immediately.
 6. Skim results for anything that looks like the same feature
 7. If likely match found, open that PR to confirm scope
 8. If an issue already exists for the same problem, that is acceptable and does not need to be mentioned in the description
