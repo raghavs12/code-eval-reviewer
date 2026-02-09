@@ -8,7 +8,7 @@ description: Review Shipd MARS project submissions using the problem inputs as s
 ## Workflow Overview
 
 1. **Parse input files** - Quick-Setup.txt, Problem-Description.txt, Solution.txt
-2. **Check similarity first** - If multiple problem descriptions are provided, run the similarity prompt below before any other review steps. If any problem is similar, stop and tell the user. Do not proceed.
+2. **Check similarity first** - If multiple problem descriptions are provided, or if `Problem-Description.txt` contains a "Similar Problems" (or equivalent) section listing other problem statements, run the similarity prompt below before any other review steps. Treat each listed item as P2/P3. If any problem is similar, stop and tell the user. Do not proceed.
 3. **Validate repository early** - Check stars, license, maintenance, URL, language, and run PR/issue search. If validation fails, the issue is closed/resolved, or a matching open/merged PR exists, reject immediately and still write `feedback.md`. Do not proceed.
 4. **Follow 8-stage review** - Complete ALL stages regardless of issues found
 3. **Use regressive analysis** - Read tests FIRST -> extract requirements -> check if description matches
