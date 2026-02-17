@@ -13,7 +13,7 @@
 | No Existing Fix | No open or merged PR already solving this | Search issues/PRs |
 
 ### Existing PR/Issue Check (CRITICAL)
-1. Pull repo + issue info from github-setup.md or Quick-Setup.txt
+1. Pull repo + issue info from github-setup.md or setup.sh
 2. Search GitHub PRs (open + merged) for keywords in title/body
 3. Search issues + PRs together with broader keywords
 4. Open provided issue and look for linked PRs or references

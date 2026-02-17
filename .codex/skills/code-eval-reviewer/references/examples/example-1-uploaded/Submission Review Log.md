@@ -18,9 +18,9 @@ Status: Accepted
 
 Problem Description: .codex\skills\code-eval-reviewer\references\examples\example-1-uploaded\Problem-Description.txt
 
-Quick Setup (repo, commit, test patch, Dockerfile): .codex\skills\code-eval-reviewer\references\examples\example-1-uploaded\Quick-Setup.txt
+Quick Setup (repo, commit, test patch, Dockerfile): .codex\skills\code-eval-reviewer\references\examples\example-1-uploaded\setup.sh
 
-Solution Patch: .codex\skills\code-eval-reviewer\references\examples\example-1-uploaded\Solution.txt
+Solution Patch: .codex\skills\code-eval-reviewer\references\examples\example-1-uploaded\solution.patch
 
 ## Review Stages
 

@@ -2,9 +2,9 @@
 
 ## Data Format
 
-- **Quick-Setup.txt**: Repo URL, commit hash, test patch, Dockerfile, test.sh
+- **setup.sh**: Repo URL, commit hash, test patch, Dockerfile, test.sh
 - **Problem-Description.txt**: Task brief, requirements, test assumptions
-- **Solution.txt**: Solution patch (git diff format)
+- **solution.patch**: Solution patch (git diff format)
 
 All problem info is inside these files. Do not assume or read from any other folder.
 
@@ -21,7 +21,7 @@ Checking for existing PRs or issues that already solve the same problem is criti
 - Open-source, permissive license (see `references/allowed-licenses.md`)
 - GitHub issue URL is optional; it does not need to be mentioned in the description if it already exists
 - Check for existing GitHub issue or PR solving the same problem:
-  - Pull the repo + issue info from Quick-Setup.txt
+  - Pull the repo + issue info from setup.sh
   - Search GitHub PRs (open + merged) for keywords in title/body
   - Search issues + PRs together with broader keywords
   - Open the provided issue and check if it is closed/resolved; if closed, reject immediately. Also check for linked PRs or references
