@@ -49,6 +49,7 @@ Checking for existing PRs or issues that already solve the same problem is criti
 ### R4 Test
 
 - Test patch is a valid git patch
+- If `git apply --check` fails only due to CRLF line endings, normalize patch to LF and retry (reviewer-side normalization is acceptable)
 - Does not conflict with solution patch and can be applied in any order
 - Only test changes (no solution or dockerfile changes)
 - Includes `test.sh`:
@@ -60,6 +61,7 @@ Checking for existing PRs or issues that already solve the same problem is criti
 ### R5 Solution
 
 - Solution patch is a valid git patch
+- If patch apply fails only due to CRLF line endings, normalize patch to LF and retry (reviewer-side normalization is acceptable)
 - Does not conflict with test patch and can be applied in any order
 - No new deps requiring internet
 - Only solution implementation (no dockerfile changes)

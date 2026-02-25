@@ -71,6 +71,7 @@ CMD ["/bin/bash"]  # or equivalent entrypoint
 | Check | Criteria | Command |
 |-------|----------|---------|
 | Valid Patch | Applies cleanly | `git apply --check test.patch` |
+| CRLF Fallback | If check fails only due to CRLF line endings, normalize to LF and retry | Normalize then rerun `git apply --check test.patch` |
 | No Conflicts | Works with solution.patch in any order | Apply both ways |
 | Test Only | No solution/dockerfile changes | Inspect patch content |
 | Has test.sh | Script with base/new modes | Check file exists |
@@ -92,6 +93,7 @@ CMD ["/bin/bash"]  # or equivalent entrypoint
 | Check | Criteria | Command |
 |-------|----------|---------|
 | Valid Patch | Applies cleanly | `git apply --check solution.patch` |
+| CRLF Fallback | If apply/check fails only due to CRLF line endings, normalize to LF and retry | Normalize then rerun `git apply --check solution.patch` |
 | No Conflicts | Works with test.patch in any order | Apply both ways |
 | No New Deps | No internet-requiring dependencies | Inspect imports/requirements |
 | Solution Only | No dockerfile changes | Inspect patch content |

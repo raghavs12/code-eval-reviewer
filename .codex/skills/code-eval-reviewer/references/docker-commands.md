@@ -82,6 +82,27 @@ $content = $content -replace "`r`n", "`n"
 [System.IO.File]::WriteAllText("test.sh", $content, [System.Text.UTF8Encoding]::new($false))
 ```
 
+### Patch CRLF Normalization
+If `git apply --check` fails only due to CRLF patch line endings, normalize the patch and retry:
+
+```bash
+sed -i 's/\r$//' test.patch
+sed -i 's/\r$//' solution.patch
+git apply --check test.patch
+git apply --check solution.patch
+```
+
+PowerShell alternative:
+```powershell
+$p = Get-Content test.patch -Raw
+$p = $p -replace "`r`n", "`n"
+[System.IO.File]::WriteAllText("test.patch", $p, [System.Text.UTF8Encoding]::new($false))
+
+$p2 = Get-Content solution.patch -Raw
+$p2 = $p2 -replace "`r`n", "`n"
+[System.IO.File]::WriteAllText("solution.patch", $p2, [System.Text.UTF8Encoding]::new($false))
+```
+
 ### Patch Conflicts
 ```bash
 # Check if patch applies cleanly

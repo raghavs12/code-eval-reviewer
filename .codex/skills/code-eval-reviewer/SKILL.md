@@ -91,6 +91,8 @@ sed -i 's/\r$//' ./test.sh
 ./test.sh new   # MUST FAIL
 ```
 
+If `git apply --check` fails only due to CRLF line endings in patch files, normalize patch files to LF and retry. Treat this as an environment normalization step, not a submission issue.
+
 **Dockerfile Requirements:**
 - Base image: `public.ecr.aws/x8v8d7g8/mars-base:latest`
 - Entrypoint: `/bin/bash`
@@ -157,6 +159,8 @@ docker run -it --network=none shipd/<repo-name>
 ./test.sh base  # MUST PASS
 ./test.sh new   # MUST PASS
 ```
+
+If solution patch apply fails only due to CRLF line endings, normalize to LF and retry before judging patch validity.
 
 **Solution Checklist:**
 - [ ] Legitimate implementation (not test gaming)
