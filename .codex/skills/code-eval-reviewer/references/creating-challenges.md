@@ -48,8 +48,8 @@ Use this file as the source of truth for hard requirements and checklist items.
 - Only implementation changes (no Dockerfile modifications)
 - With test and solution patches applied: ./test.sh base passes and ./test.sh new passes
 - Scope requirement: system-level and multi-file at the challenge level (validated by Shipd agent runs)
-- Agent-run requirement: median of successful runs >= 3 files modified, >= 100 agent messages, and >= 400 LOC added (validated externally)
-- Reviewers should not enforce agent-run thresholds from the submission content unless explicitly instructed
+- Agent-run requirement: median of successful runs >= 3 files modified and >= 100 agent messages (validated externally)
+- Reviewer LOC requirement: solution.patch must add >= 380 non-empty lines (enforced during review; request changes if below 380)
 - Reject if solution appears padded with dead code or unnecessary lengthening
 
 ## Solution & Code Checklist (6)

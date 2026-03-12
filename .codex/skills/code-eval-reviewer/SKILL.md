@@ -15,9 +15,14 @@ description: Review Shipd MARS project submissions using problem inputs as sourc
 3. Repository validation (hard requirements): GitHub URL + commit, recent activity, stars, license, language, no open or merged PR that already fixes the same problem. If any fail, reject.
 4. Docker verification: run base/new tests pre-solution, then with solution. Normalize CRLF if needed.
 5. Evaluate Problem checklist (7) and Tests checklist (8) from references/creating-challenges.md.
-6. Evaluate Solution & Code checklist (6) with emphasis on solvability and padding/dead code. Agent-run thresholds are externally verified.
-7. Assign overall quality score 1-7 using references/reviewer-rubric-2026.md.
-8. Write feedback.md in the repo root using references/feedback-template.md. Include Reasoning in feedback.md only (no review_log.md).
+6. Spec/Test alignment audit (required):
+   - Extract explicit contracts (must/should) and split combined statements.
+   - Flag implied contracts and over-prescriptive schemas.
+   - Map each test to one or more contracts; flag hidden requirements.
+   - Flag ambiguous semantics and internal leakage assertions.
+7. Evaluate Solution & Code checklist (6) with emphasis on solvability, LOC >= 380, and padding/dead code. Agent-run thresholds are externally verified.
+8. Assign overall quality score 1-7 using references/reviewer-rubric-2026.md.
+9. Write feedback.md in the repo root using references/feedback-template.md. Include Reasoning in feedback.md only (no review_log.md).
 
 ## Input Files
 

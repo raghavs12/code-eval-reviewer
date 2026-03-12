@@ -89,6 +89,92 @@ def requirement_sentences(text: str) -> List[str]:
     return req
 
 
+def split_compound_requirements(sentences: List[str]) -> List[str]:
+    parts = []
+    for s in sentences:
+        chunks = re.split(r"\b(and|or|,|;)\b", s)
+        for c in chunks:
+            c = c.strip()
+            if len(c) > 8 and re.search(r"\b(must|should|shall|needs to|required to|must not|should not)\b", c, re.IGNORECASE):
+                parts.append(c)
+    return parts or sentences
+
+
+def find_implied_contracts(text: str) -> List[str]:
+    implied = []
+    patterns = [
+        r"\binvariant\b",
+        r"\bmust\s+reach\b",
+        r"\bmay\s+reach\b",
+        r"\bdefinitions\b",
+        r"\bcontract\b",
+        r"\bimplies\b",
+    ]
+    if any(re.search(p, text, re.IGNORECASE) for p in patterns):
+        if not re.search(r"\bdefines?\s+the\s+definitions?\s+field\b", text, re.IGNORECASE):
+            implied.append("Implied contract: definitions field behavior is not explicitly defined.")
+    return implied
+
+
+def find_schema_prescription(text: str) -> List[str]:
+    issues = []
+    schema_patterns = [
+        r"\bdataclass\b",
+        r"\bfrozen\b",
+        r"\bschema\b",
+        r"\bfield(s)?\b",
+        r"\btyped?\b",
+        r"\bstruct\b",
+        r"\bclass\s+name\b",
+    ]
+    if any(re.search(p, text, re.IGNORECASE) for p in schema_patterns):
+        issues.append("Spec appears to prescribe internal schema/structure details.")
+    return issues
+
+
+def extract_test_cases(test_patch: str) -> List[str]:
+    cases = []
+    for m in re.findall(r"def (test_[\\w_]+)\\s*\\(", test_patch):
+        cases.append(m.replace("_", " "))
+    for m in re.findall(r"\\btest\\(\\s*['\\\"]([^'\\\"]+)['\\\"]", test_patch):
+        cases.append(m)
+    for m in re.findall(r"\\bit\\(\\s*['\\\"]([^'\\\"]+)['\\\"]", test_patch):
+        cases.append(m)
+    for m in re.findall(r"\\bfunc\\s+(Test\\w+)\\s*\\(", test_patch):
+        cases.append(m)
+    return cases
+
+
+def spec_test_alignment(contracts: List[str], test_cases: List[str], test_patch: str) -> List[str]:
+    issues = []
+    if not contracts or not test_cases:
+        return issues
+    contract_tokens = [set(tokenize(c)) for c in contracts]
+    for case in test_cases:
+        tokens = set(tokenize(case))
+        if not tokens:
+            continue
+        overlap = max((len(tokens & ct) / max(1, len(tokens))) for ct in contract_tokens)
+        if overlap < 0.2:
+            issues.append(f"Test case may not map to an explicit contract: {case}")
+            break
+    if re.search(r"assert\\s+len\\(", test_patch) or re.search(r"assertEqual\\(len\\(", test_patch):
+        issues.append("Tests assert specific counts that may depend on unspecified semantics.")
+    return issues
+
+
+def ambiguity_checks(text: str) -> List[str]:
+    issues = []
+    ambiguous_terms = [
+        "path-sensitive", "path sensitive", "may", "must", "order", "duplicate", "empty",
+        "undefined", "unspecified", "implied", "invariant",
+    ]
+    if any(term in text.lower() for term in ambiguous_terms):
+        if not re.search(r"\bexplicitly\b|\bdefined\b|\bclarify\b", text, re.IGNORECASE):
+            issues.append("Spec contains potentially ambiguous semantics without explicit clarification.")
+    return issues
+
+
 def identifier_tokens(text: str) -> List[str]:
     tokens = []
     tokens += re.findall(r"`([^`]+)`", text)
@@ -339,6 +425,14 @@ def analyze_problem(text: str) -> Dict:
     if not clear_writing:
         issues.append("Writing/formatting is hard to scan")
 
+    implied = find_implied_contracts(text)
+    schema_issues = find_schema_prescription(text)
+    ambiguity_issues = ambiguity_checks(text)
+
+    issues.extend(implied)
+    issues.extend(schema_issues)
+    issues.extend(ambiguity_issues)
+
     checks = [
         ("Requirements are complete and self-contained", req_complete),
         ("No ambiguities, fully deterministic", no_ambiguity),
@@ -353,6 +447,7 @@ def analyze_problem(text: str) -> Dict:
         "word_count": word_count,
         "issues": issues,
         "checks": checks,
+        "contracts": split_compound_requirements(requirement_sentences(text)),
     }
 
 
@@ -441,6 +536,12 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     no_redundancy = dup_count <= max(1, len(norm) // 4)
     if not no_redundancy:
         issues.append("Redundant or repetitive tests detected")
+
+    contracts = split_compound_requirements(requirement_sentences(desc_text))
+    test_cases = extract_test_cases(test_patch)
+    alignment_issues = spec_test_alignment(contracts, test_cases, test_patch)
+    if alignment_issues:
+        issues.extend(alignment_issues)
 
     desc_tokens = set(tokenize(desc_text))
     test_tokens = set(tokenize(test_patch))
@@ -537,6 +638,10 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
 
     meets_requirements = docker_results.get("solution_new_pass", False)
     no_regressions = docker_results.get("solution_base_pass", False)
+
+    if added < 380:
+        issues.append(f"Added LOC below required minimum ({added})")
+        meets_requirements = False
 
     padded = (comment_ratio > 0.30) or (dup_ratio > 0.30) or (suspicious > 5)
     no_defensive = not padded
@@ -759,7 +864,35 @@ def summarize_verification(docker_results: Dict) -> str:
     )
 
 
-def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analysis: Dict, docker_results: Dict, word_count: int, stats: Optional[Dict]) -> str:
+def fix_suggestions(issues: List[str]) -> List[str]:
+    suggestions = []
+    for issue in issues:
+        if "determinism" in issue.lower():
+            suggestions.append("Remove timing/randomness and make tests fully deterministic.")
+        elif "fail on base" in issue.lower():
+            suggestions.append("Adjust new tests so they fail on the base commit and pass only with the solution.")
+        elif "pass with solution" in issue.lower():
+            suggestions.append("Ensure solution.patch fully implements the required behavior so both base/new pass.")
+        elif "docker build failed" in issue.lower() or "dockerfile" in issue.lower():
+            suggestions.append("Fix Dockerfile to build offline and run tests with --network none.")
+        elif "missing required patch files" in issue.lower():
+            suggestions.append("Provide both test.patch and solution.patch in the submission bundle.")
+        elif "added loc below required minimum" in issue.lower():
+            suggestions.append("Expand the solution to a >= 380 LOC change that genuinely implements required behavior (no padding).")
+        elif "patch" in issue.lower() and "apply" in issue.lower():
+            suggestions.append("Regenerate patches so they apply cleanly against the specified commit.")
+        elif "alignment" in issue.lower() or "unspecified behavior" in issue.lower():
+            suggestions.append("Align tests to the problem description and remove unstated requirements.")
+        elif "weak" in issue.lower() and "assert" in issue.lower():
+            suggestions.append("Strengthen assertions to verify exact expected outputs.")
+        elif "scope" in issue.lower():
+            suggestions.append("Reduce scope to a realistic change that fits the repo's purpose.")
+        elif "prescriptive" in issue.lower():
+            suggestions.append("Rewrite the spec to describe behavior, not implementation steps.")
+    return list(dict.fromkeys(suggestions))
+
+
+def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analysis: Dict, docker_results: Dict, word_count: int, stats: Optional[Dict], decision: str, fixable_issues: List[str]) -> str:
     lines = []
     lines.append(summarize_problem(problem_analysis))
     lines.append("")
@@ -782,6 +915,15 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
         lines.append(f"- Docker new fail (pre-solution): {docker_results.get('new_only_fail', False)}")
         lines.append(f"- Docker base pass (with solution): {docker_results.get('solution_base_pass', False)}")
         lines.append(f"- Docker new pass (with solution): {docker_results.get('solution_new_pass', False)}")
+    if decision == "Request Changes":
+        lines.append("")
+        lines.append("Fixes:")
+        suggestions = fix_suggestions(fixable_issues)
+        if suggestions:
+            for s in suggestions:
+                lines.append(f"- {s}")
+        else:
+            lines.append("- Address the listed issues and re-run verification.")
     return "\n".join(lines)
 
 
@@ -1003,6 +1145,8 @@ def main():
         docker_results,
         problem_analysis["word_count"],
         stats,
+        decision,
+        fixable_issues,
     )
 
     problem_block, problem_yes = format_checklist(problem_checks)
