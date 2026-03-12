@@ -15,7 +15,7 @@ description: Review Shipd MARS project submissions using problem inputs as sourc
 3. Repository validation (hard requirements): GitHub URL + commit, recent activity, stars, license, language, no open or merged PR that already fixes the same problem. If any fail, reject.
 4. Docker verification: run base/new tests pre-solution, then with solution. Normalize CRLF if needed.
 5. Evaluate Problem checklist (7) and Tests checklist (8) from references/creating-challenges.md.
-6. Evaluate Solution & Code checklist (6) with emphasis on solvability and LOC requirement (target 400+, accept >=375; below 375 fails). Flag padding or dead code.
+6. Evaluate Solution & Code checklist (6) with emphasis on solvability and padding/dead code. Agent-run thresholds are externally verified.
 7. Assign overall quality score 1-7 using references/reviewer-rubric-2026.md.
 8. Write feedback.md in the repo root using references/feedback-template.md. Include Reasoning in feedback.md only (no review_log.md).
 
@@ -73,7 +73,7 @@ Use the exact commands in references/docker-commands.md. Do not prompt the user.
 - Overall quality score is 1-7 using references/reviewer-rubric-2026.md.
 - Approve: no hard requirement failures and quality score >= 5.
 - Request Changes: hard requirements pass and quality score == 4.
-- Reject: quality score <= 3 or any hard requirement failure (duplicate, invalid repo, invalid patch, tests not runnable, LOC < 375, or padded/dead-code solution).
+- Reject: quality score <= 3 or any hard requirement failure (duplicate, invalid repo, invalid patch, tests not runnable, or padded/dead-code solution).
 
 ## Output
 
