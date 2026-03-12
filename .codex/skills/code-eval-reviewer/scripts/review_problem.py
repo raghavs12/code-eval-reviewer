@@ -198,16 +198,19 @@ def validate_repo(repo_url: Optional[str], description_text: str) -> Dict:
         "issues": [],
         "notes": [],
         "owner_repo": None,
+        "reject_reasons": [],
     }
     if not repo_url or "github.com" not in repo_url:
         result["ok"] = False
         result["issues"].append("Missing or invalid GitHub URL")
+        result["reject_reasons"].append("Missing or invalid GitHub URL")
         return result
 
     m = re.search(r"github\.com/([^/]+)/([^/]+)", repo_url)
     if not m:
         result["ok"] = False
         result["issues"].append("Unable to parse GitHub owner/repo")
+        result["reject_reasons"].append("Unable to parse GitHub owner/repo")
         return result
 
     owner, repo = m.group(1), m.group(2)
@@ -217,6 +220,7 @@ def validate_repo(repo_url: Optional[str], description_text: str) -> Dict:
     if not repo_info:
         result["ok"] = False
         result["issues"].append("GitHub API lookup failed")
+        result["reject_reasons"].append("GitHub API lookup failed")
         return result
 
     stars = repo_info.get("stargazers_count", 0)
@@ -233,19 +237,23 @@ def validate_repo(repo_url: Optional[str], description_text: str) -> Dict:
     if stars < 500:
         result["ok"] = False
         result["issues"].append("Repository has fewer than 500 stars")
+        result["reject_reasons"].append("Repository has fewer than 500 stars")
 
     allowed_langs = {"TypeScript", "JavaScript", "Python", "Go", "Rust"}
     if language not in allowed_langs:
         result["ok"] = False
         result["issues"].append("Repository language not in allowed list")
+        result["reject_reasons"].append("Repository language not in allowed list")
 
     allowed = set(load_allowed_licenses())
     if license_id in {"NOASSERTION", "", "Other"}:
         result["ok"] = False
         result["issues"].append("Missing or non-permissive license")
+        result["reject_reasons"].append("Missing or non-permissive license")
     elif allowed and license_id not in allowed:
         result["ok"] = False
         result["issues"].append(f"License not in allowed list ({license_id})")
+        result["reject_reasons"].append(f"License not in allowed list ({license_id})")
 
     if pushed_at:
         try:
@@ -254,12 +262,14 @@ def validate_repo(repo_url: Optional[str], description_text: str) -> Dict:
             if age_days > 365:
                 result["ok"] = False
                 result["issues"].append("Repository inactive (no commits in 12 months)")
+                result["reject_reasons"].append("Repository inactive (no commits in 12 months)")
         except Exception:
             result["issues"].append("Could not parse last push date")
 
     if re.search(r"github\.com/[^/]+/[^/]+/pull/\d+", description_text):
         result["ok"] = False
         result["issues"].append("Description references an existing PR")
+        result["reject_reasons"].append("Description references an existing PR")
 
     keywords = tokenize(description_text)[:6]
     if keywords:
@@ -272,6 +282,7 @@ def validate_repo(repo_url: Optional[str], description_text: str) -> Dict:
             if any(sum(1 for k in keywords if k in t.lower()) >= 3 for t in titles):
                 result["ok"] = False
                 result["issues"].append("Potential matching PR found by keyword search")
+                result["reject_reasons"].append("Potential matching PR found by keyword search")
 
     return result
 
@@ -929,7 +940,6 @@ def main():
         return
 
     repo_validation = validate_repo(repo_url, main_desc)
-    repo_ok = repo_validation["ok"]
 
     docker_results = {}
     if repo_url and commit_hash:
@@ -954,31 +964,32 @@ def main():
     solution_rating = rating_from_checks(solution_checks, ["Meets all requirements", "No regressions, follows repo patterns"])
     quality_score = min(problem_rating, test_rating, solution_rating)
 
-    hard_failures = []
-    if not repo_ok:
-        hard_failures.extend(repo_validation["issues"])
+    reject_reasons = list(repo_validation.get("reject_reasons", []))
+    fixable_issues = []
+
     if not test_patch_file or not solution_patch_file:
-        hard_failures.append("Missing required patch files")
+        fixable_issues.append("Missing required patch files")
     if docker_results.get("error"):
-        hard_failures.append(docker_results["error"])
+        fixable_issues.append(docker_results["error"])
     if not docker_results.get("skipped"):
         if test_patch_file and not docker_results.get("new_only_fail", False):
-            hard_failures.append("New tests do not fail on base commit")
+            fixable_issues.append("New tests do not fail on base commit")
         if solution_patch_file and (not docker_results.get("solution_new_pass", False) or not docker_results.get("solution_base_pass", False)):
-            hard_failures.append("Tests do not pass with solution applied")
+            fixable_issues.append("Tests do not pass with solution applied")
 
-    if hard_failures or quality_score <= 3:
+    if reject_reasons:
         decision = "Reject"
-    elif quality_score == 4:
-        decision = "Request Changes"
-    else:
+    elif quality_score >= 5 and not fixable_issues and not problem_analysis["issues"] and not test_analysis["issues"] and not solution_analysis["issues"]:
         decision = "Approve"
+    else:
+        decision = "Request Changes"
 
     issues = []
     issues.extend(repo_validation["issues"])
     issues.extend(problem_analysis["issues"])
     issues.extend(test_analysis["issues"])
     issues.extend(solution_analysis["issues"])
+    issues.extend(fixable_issues)
     if not issues:
         issues.append("No major issues found")
 
