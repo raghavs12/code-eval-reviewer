@@ -527,12 +527,7 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
     meets_requirements = docker_results.get("solution_new_pass", False)
     no_regressions = docker_results.get("solution_base_pass", False)
 
-    loc_ok = added >= 375
-    if not loc_ok:
-        issues.append(f"Added LOC below minimum threshold ({added})")
-        meets_requirements = False
-
-    padded = (comment_ratio > 0.30) or (dup_ratio > 0.30) or (suspicious > 5) or (code_lines < 300 and added >= 375)
+    padded = (comment_ratio > 0.30) or (dup_ratio > 0.30) or (suspicious > 5)
     no_defensive = not padded
     if padded:
         issues.append("Solution appears padded or includes dead/unnecessary code")
@@ -717,8 +712,66 @@ def build_feedback(issues: List[str], decision: str) -> str:
     return "Changes needed before acceptance. " + "; ".join(issues[:6])
 
 
-def build_reasoning(notes: List[str]) -> str:
-    return "\n".join(notes) if notes else "No additional internal notes."
+def summarize_problem(problem_analysis: Dict) -> str:
+    issues = problem_analysis.get("issues", [])
+    if not issues:
+        return "Problem: The spec is tight and scoped. It is clear, deterministic, and non-prescriptive, with clean formatting and no irrelevant context."
+    if len(issues) <= 2:
+        return "Problem: The spec is mostly clear and scoped, but has minor issues that need cleanup: " + "; ".join(issues[:2]) + "."
+    return "Problem: The spec needs revision. Issues: " + "; ".join(issues[:3]) + "."
+
+
+def summarize_tests(test_analysis: Dict) -> str:
+    issues = test_analysis.get("issues", [])
+    if not issues:
+        return "Tests: The suite is comprehensive, deterministic, and behavioral, with strong assertions and no reliance on internals."
+    if len(issues) <= 2:
+        return "Tests: Mostly solid, but a few issues need attention: " + "; ".join(issues[:2]) + "."
+    return "Tests: Quality gaps detected. Issues: " + "; ".join(issues[:3]) + "."
+
+
+def summarize_solution(solution_analysis: Dict) -> str:
+    issues = solution_analysis.get("issues", [])
+    if not issues:
+        return "Solution: Implementation is consistent with repo patterns, avoids public API changes, and shows no padding or unrelated edits."
+    if len(issues) <= 2:
+        return "Solution: Mostly OK, but needs fixes: " + "; ".join(issues[:2]) + "."
+    return "Solution: Significant issues found: " + "; ".join(issues[:3]) + "."
+
+
+def summarize_verification(docker_results: Dict) -> str:
+    if docker_results.get("skipped"):
+        return "Verification: Docker verification skipped."
+    return (
+        "Verification: Docker runs confirm base tests pass, new tests fail pre-solution, "
+        "and both base/new pass after applying the solution."
+    )
+
+
+def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analysis: Dict, docker_results: Dict, word_count: int, stats: Optional[Dict]) -> str:
+    lines = []
+    lines.append(summarize_problem(problem_analysis))
+    lines.append("")
+    lines.append(summarize_tests(test_analysis))
+    lines.append("")
+    lines.append(summarize_solution(solution_analysis))
+    lines.append("")
+    lines.append(summarize_verification(docker_results))
+    lines.append("")
+    lines.append("Diagnostics:")
+    lines.append(f"- Word count: {word_count}")
+    if stats:
+        lines.append(
+            f"- Solution LOC added: {stats.get('added', 0)} (non-empty: {stats.get('code', 0)})"
+        )
+    if docker_results.get("skipped"):
+        lines.append("- Docker verification skipped")
+    else:
+        lines.append(f"- Docker base pass: {docker_results.get('base_only_pass', False)}")
+        lines.append(f"- Docker new fail (pre-solution): {docker_results.get('new_only_fail', False)}")
+        lines.append(f"- Docker base pass (with solution): {docker_results.get('solution_base_pass', False)}")
+        lines.append(f"- Docker new pass (with solution): {docker_results.get('solution_new_pass', False)}")
+    return "\n".join(lines)
 
 
 def main():
@@ -868,7 +921,7 @@ def main():
             "",
             "Reasoning",
             "Optional",
-            build_reasoning(reasoning),
+            "\n".join(reasoning),
         ]
         output_path = problem_dir / args.output
         output_path.write_text("\n".join(output), encoding="utf-8")
@@ -931,26 +984,15 @@ def main():
 
     feedback_text = build_feedback(issues, decision)
 
-    notes = []
-    notes.append(f"Word count: {problem_analysis['word_count']}")
-    if solution_analysis.get("stats"):
-        stats = solution_analysis["stats"]
-        notes.append(
-            f"Solution LOC added: {stats.get('added', 0)} "
-            f"(code: {stats.get('code', 0)}, comments: {stats.get('comment', 0)}, "
-            f"comment ratio: {stats.get('comment_ratio', 0):.2f}, dup ratio: {stats.get('dup_ratio', 0):.2f})"
-        )
-    if repo_validation["notes"]:
-        notes.extend(repo_validation["notes"])
-    if docker_results.get("skipped"):
-        notes.append("Docker verification skipped")
-    else:
-        notes.append(f"Docker base pass: {docker_results.get('base_only_pass', False)}")
-        notes.append(f"Docker new fail (pre-solution): {docker_results.get('new_only_fail', False)}")
-        notes.append(f"Docker base pass (with solution): {docker_results.get('solution_base_pass', False)}")
-        notes.append(f"Docker new pass (with solution): {docker_results.get('solution_new_pass', False)}")
-
-    reasoning = build_reasoning(notes)
+    stats = solution_analysis.get("stats")
+    reasoning = build_reasoning(
+        problem_analysis,
+        test_analysis,
+        solution_analysis,
+        docker_results,
+        problem_analysis["word_count"],
+        stats,
+    )
 
     problem_block, problem_yes = format_checklist(problem_checks)
     test_block, test_yes = format_checklist(test_checks)

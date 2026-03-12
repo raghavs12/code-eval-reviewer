@@ -1,6 +1,7 @@
 # Reviewer Rubric (2026)
 
 Use this rubric to assign the overall quality score (1-7).
+Note: Agent-run thresholds (>=3 files modified, >=100 agent messages, >=400 LOC added median) are validated externally and should not be enforced from the submission content.
 
 ## Rating 7 - Exceptional
 Problem Spec
