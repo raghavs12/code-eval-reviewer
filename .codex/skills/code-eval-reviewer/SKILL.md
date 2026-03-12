@@ -71,9 +71,9 @@ Use the exact commands in references/docker-commands.md. Do not prompt the user.
 ## Scoring and Decision
 
 - Overall quality score is 1-7 using references/reviewer-rubric-2026.md.
-- Approve: no hard requirement failures and quality score >= 5.
-- Request Changes: hard requirements pass and quality score == 4.
-- Reject: quality score <= 3 or any hard requirement failure (duplicate, invalid repo, invalid patch, tests not runnable, or padded/dead-code solution).
+- Approve: no fixable issues and quality score >= 5.
+- Request Changes: fixable issues (test determinism, alignment, missing patches, Docker failures, weak specs, etc).
+- Reject: non-fixable issues only (duplicate/similar problem, wrong license, invalid repo, or existing PR that already fixes the problem).
 
 ## Output
 
