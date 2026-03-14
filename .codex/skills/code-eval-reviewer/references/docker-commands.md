@@ -83,7 +83,7 @@ $content = $content -replace "`r`n", "`n"
 ```
 
 ### Patch CRLF Normalization
-If `git apply --check` fails only due to CRLF patch line endings, normalize the patch and retry:
+If `git apply --check` fails only due to CRLF patch line endings, normalize the patch and retry. Treat this as environment normalization, not a submission issue:
 
 ```bash
 sed -i 's/\r$//' test.patch

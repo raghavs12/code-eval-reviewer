@@ -13,7 +13,7 @@ description: Review Shipd MARS project submissions using problem inputs as sourc
 1. Parse inputs: setup.sh, Problem-Description.txt, test.patch, solution.patch, Dockerfile, test.sh.
 2. Similarity gate: if multiple problem descriptions are provided or the problem description includes a "Similar Problems" section listing other problems, run the similarity prompt. If any similarity is detected, stop and write feedback.md with decision Reject.
 3. Repository validation (hard requirements): GitHub URL + commit, recent activity, stars, license, language, no open or merged PR that already fixes the same problem. If any fail, reject.
-4. Docker verification: run base/new tests pre-solution, then with solution. Normalize CRLF if needed.
+4. Docker verification: run base/new tests pre-solution, then with solution. If `git apply --check` fails only due to CRLF line endings in patch files, normalize patch files to LF and retry. Treat this as an environment normalization step, not a submission issue.
 5. Evaluate Problem checklist (7) and Tests checklist (8) from references/creating-challenges.md.
 6. Spec/Test alignment audit (required):
    - Extract explicit contracts (must/should) and split combined statements.
