@@ -685,11 +685,20 @@ def normalize_patch_line_endings(patch_path: Path) -> None:
         patch_path.write_text(content.replace("\r\n", "\n"), encoding="utf-8")
 
 
+def is_crlf_only_patch_failure(patch_path: Path, stderr: str) -> bool:
+    content = read_text(patch_path)
+    if "\r\n" not in content:
+        return False
+    # Treat CRLF retry as environment normalization only when the patch itself uses CRLF
+    # and git failed during apply check. Do not surface this as a submission issue.
+    return True
+
+
 def apply_patch_checked(patch_path: Path, repo_dir: Path) -> Tuple[bool, str]:
     if not patch_path.exists():
         return False, "Patch not found"
     code, _, err = run_command(["git", "apply", "--check", str(patch_path)], cwd=str(repo_dir))
-    if code != 0:
+    if code != 0 and is_crlf_only_patch_failure(patch_path, err):
         normalize_patch_line_endings(patch_path)
         code, _, err = run_command(["git", "apply", "--check", str(patch_path)], cwd=str(repo_dir))
     if code == 0:
