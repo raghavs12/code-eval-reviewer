@@ -20,7 +20,10 @@ description: Review Shipd MARS project submissions using problem inputs as sourc
    - Flag implied contracts and over-prescriptive schemas.
    - Map each test to one or more contracts; flag hidden requirements.
    - Flag ambiguous semantics and internal leakage assertions.
-7. Evaluate Solution & Code checklist (6) with emphasis on solvability, LOC >= 380, and padding/dead code. Agent-run thresholds are externally verified.
+   - Flag tests that require a stronger interpretation than the spec states.
+   - Flag representation-choice assertions (exact shape, ordering, normalization, canonicalization, inlining, flattening, specific counts) unless the spec requires them explicitly.
+   - When multiple valid interpretations exist, mark tests unfair if they silently force one interpretation.
+7. Evaluate Solution & Code checklist (6) with emphasis on solvability, meaningful LOC >= 380, and padding/dead code. Count only meaningful hand-authored changes; exclude generated outputs and similar boilerplate artifacts. Agent-run thresholds are externally verified.
 8. Assign overall quality score 1-7 using references/reviewer-rubric-2026.md.
 9. Write feedback.md in the repo root using references/feedback-template.md. Include Reasoning in feedback.md only (no review_log.md).
 

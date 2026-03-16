@@ -49,7 +49,8 @@ Use this file as the source of truth for hard requirements and checklist items.
 - With test and solution patches applied: ./test.sh base passes and ./test.sh new passes
 - Scope requirement: system-level and multi-file at the challenge level (validated by Shipd agent runs)
 - Agent-run requirement: median of successful runs >= 3 files modified and >= 100 agent messages (validated externally)
-- Reviewer LOC requirement: solution.patch must add >= 380 non-empty lines (enforced during review; request changes if below 380)
+- Reviewer LOC requirement: solution.patch must add >= 380 meaningful non-empty hand-authored lines (enforced during review; request changes if below 380)
+- Exclude generated files, generated parser outputs, vendored artifacts, lockfiles, and similar non-meaningful boilerplate from reviewer LOC counting
 - Reject if solution appears padded with dead code or unnecessary lengthening
 
 ## Solution & Code Checklist (6)

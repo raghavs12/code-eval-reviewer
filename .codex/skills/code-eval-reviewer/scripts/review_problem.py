@@ -145,6 +145,69 @@ def extract_test_cases(test_patch: str) -> List[str]:
     return cases
 
 
+def representation_choice_issues(desc_text: str, test_patch: str) -> List[str]:
+    issues = []
+    desc_lower = desc_text.lower()
+    exact_shape_patterns = [
+        r"assertEqual\\(len\\(",
+        r"assert\\s+len\\(",
+        r"assertEqual\\([^\\n]*\\[[^\\n]*\\]",
+        r"assert\\s+[^\\n]*==\\s*\\[[^\\n]*\\]",
+        r"assert\\s+[^\\n]*==\\s*\\{[^\\n]*\\}",
+        r"assertEqual\\([^\\n]*['\\\"]",
+    ]
+    representation_terms = [
+        "shape", "order", "ordered", "sorted", "normalize", "normalized", "canonical",
+        "canonicalize", "flatten", "flattened", "inline", "inlined", "exact", "count",
+    ]
+    exact_shape_assertion = any(re.search(p, test_patch) for p in exact_shape_patterns)
+    representation_risk = any(term in test_patch.lower() for term in representation_terms)
+    spec_mentions_representation = any(term in desc_lower for term in representation_terms)
+
+    if exact_shape_assertion and not spec_mentions_representation:
+        issues.append("Tests assert exact shape/count/order without the spec explicitly requiring that representation choice.")
+    elif representation_risk and not spec_mentions_representation:
+        issues.append("Tests may enforce normalization/canonicalization or another representation choice not stated in the spec.")
+    return issues
+
+
+def stronger_than_spec_issues(contracts: List[str], desc_text: str, test_patch: str) -> List[str]:
+    issues = []
+    if not contracts:
+        return issues
+    contract_tokens = set(tokenize(" ".join(contracts)))
+    assert_lines = re.findall(r"\\bassert(?:Equal|In|NotIn|True|False)?\\b[^\\n]*", test_patch)
+    stronger_lines = []
+    for line in assert_lines:
+        tokens = set(tokenize(line))
+        if not tokens:
+            continue
+        extra = tokens - contract_tokens
+        if len(extra) >= 3:
+            stronger_lines.append(line.strip())
+    if stronger_lines:
+        issues.append("Tests may require a stronger interpretation than the problem statement explicitly states.")
+    return issues
+
+
+def multiple_valid_interpretations_issues(desc_text: str, test_patch: str) -> List[str]:
+    issues = []
+    desc_lower = desc_text.lower()
+    ambiguous_axes = [
+        ("order", ["sort", "sorted", "order"]),
+        ("shape", ["shape", "flatten", "inline", "normalize", "canonical"]),
+        ("count", ["len(", "count(", "assertEqual(len(", "assert len("]),
+        ("equivalence", ["exact", "==", "assertEqual("]),
+    ]
+    for axis_name, signals in ambiguous_axes:
+        spec_mentions = any(signal in desc_lower for signal in signals)
+        test_mentions = any(signal in test_patch for signal in signals)
+        if test_mentions and not spec_mentions:
+            issues.append(f"Tests may force one valid {axis_name} interpretation without the spec explicitly choosing it.")
+            break
+    return issues
+
+
 def spec_test_alignment(contracts: List[str], test_cases: List[str], test_patch: str) -> List[str]:
     issues = []
     if not contracts or not test_cases:
@@ -542,12 +605,19 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     alignment_issues = spec_test_alignment(contracts, test_cases, test_patch)
     if alignment_issues:
         issues.extend(alignment_issues)
+    fairness_issues = []
+    fairness_issues.extend(representation_choice_issues(desc_text, test_patch))
+    fairness_issues.extend(stronger_than_spec_issues(contracts, desc_text, test_patch))
+    fairness_issues.extend(multiple_valid_interpretations_issues(desc_text, test_patch))
+    if fairness_issues:
+        issues.extend(fairness_issues)
 
     desc_tokens = set(tokenize(desc_text))
     test_tokens = set(tokenize(test_patch))
     overlap = len(desc_tokens & test_tokens) / max(1, len(test_tokens))
     no_unspecified = overlap >= 0.2
-    if not no_unspecified:
+    if not no_unspecified or fairness_issues:
+        no_unspecified = False
         issues.append("Tests may enforce unspecified behavior")
 
     checks = [
@@ -560,7 +630,7 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
         ("No redundant tests", no_redundancy),
         ("No checks for unspecified behavior", no_unspecified),
     ]
-    return {"checks": checks, "issues": issues}
+    return {"checks": checks, "issues": issues, "fairness_issues": fairness_issues}
 
 
 def is_comment_line(line: str) -> bool:
@@ -576,24 +646,73 @@ def is_comment_line(line: str) -> bool:
     )
 
 
+def is_generated_file_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    base = os.path.basename(normalized)
+    generated_patterns = [
+        r"(^|/)(dist|build|vendor|vendors|node_modules)/",
+        r"(^|/).*generated.*$",
+        r"\.pb\.go$",
+        r"\.g\.cs$",
+        r"\.designer\.",
+        r"\.gen\.",
+        r"\.generated\.",
+        r"\.peg\.go$",
+        r"parser\.go$",
+        r"parser\.c$",
+        r"parser\.cc$",
+        r"y\.go$",
+    ]
+    if any(re.search(pattern, normalized) for pattern in generated_patterns):
+        return True
+    if any(token in base for token in ["generated", "autogen", "codegen"]):
+        return True
+    return False
+
+
+def is_meaningful_added_line(content: str) -> bool:
+    stripped = content.strip()
+    if not stripped:
+        return False
+    if is_comment_line(content):
+        return False
+    if re.fullmatch(r"[{}\[\]();,]+", stripped):
+        return False
+    if re.fullmatch(r"(break|continue|pass|return None|return nil)", stripped):
+        return False
+    return True
+
+
 def diff_stats(diff_text: str) -> Dict:
     added = 0
     code = 0
+    meaningful = 0
     comment = 0
     suspicious = 0
     seen = {}
+    current_file = None
+    generated_files = set()
+    generated_added = 0
     for line in diff_text.splitlines():
         if line.startswith("+++ ") or line.startswith("--- ") or line.startswith("@@"):
+            if line.startswith("+++ b/"):
+                current_file = line[len("+++ b/"):].strip()
+                if is_generated_file_path(current_file):
+                    generated_files.add(current_file)
             continue
         if line.startswith("+") and not line.startswith("+++ "):
             content = line[1:]
             if not content.strip():
                 continue
             added += 1
+            if current_file in generated_files:
+                generated_added += 1
             if is_comment_line(content):
                 comment += 1
             else:
                 code += 1
+            if current_file not in generated_files and is_meaningful_added_line(content):
+                meaningful += 1
             norm = re.sub(r"\s+", " ", content.strip())
             seen[norm] = seen.get(norm, 0) + 1
             if re.search(r"\b(TODO|FIXME|HACK|TEMP|generated by|chatgpt|llm)\b", content, re.IGNORECASE):
@@ -606,10 +725,13 @@ def diff_stats(diff_text: str) -> Dict:
     return {
         "added": added,
         "code": code,
+        "meaningful": meaningful,
         "comment": comment,
         "dup_ratio": dup_ratio,
         "comment_ratio": comment_ratio,
         "suspicious": suspicious,
+        "generated_added": generated_added,
+        "generated_files": sorted(generated_files),
     }
 
 
@@ -631,6 +753,7 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
 
     stats = diff_stats(solution_patch)
     added = stats["added"]
+    meaningful_added = stats["meaningful"]
     code_lines = stats["code"]
     comment_ratio = stats["comment_ratio"]
     dup_ratio = stats["dup_ratio"]
@@ -639,8 +762,8 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
     meets_requirements = docker_results.get("solution_new_pass", False)
     no_regressions = docker_results.get("solution_base_pass", False)
 
-    if added < 380:
-        issues.append(f"Added LOC below required minimum ({added})")
+    if meaningful_added < 380:
+        issues.append(f"Added meaningful LOC below required minimum ({meaningful_added})")
         meets_requirements = False
 
     padded = (comment_ratio > 0.30) or (dup_ratio > 0.30) or (suspicious > 5)
@@ -848,8 +971,11 @@ def summarize_problem(problem_analysis: Dict) -> str:
 
 def summarize_tests(test_analysis: Dict) -> str:
     issues = test_analysis.get("issues", [])
+    fairness_issues = test_analysis.get("fairness_issues", [])
     if not issues:
         return "Tests: The suite is comprehensive, deterministic, and behavioral, with strong assertions and no reliance on internals."
+    if fairness_issues:
+        return "Tests: Fairness concerns detected. " + "; ".join(fairness_issues[:2]) + "."
     if len(issues) <= 2:
         return "Tests: Mostly solid, but a few issues need attention: " + "; ".join(issues[:2]) + "."
     return "Tests: Quality gaps detected. Issues: " + "; ".join(issues[:3]) + "."
@@ -886,12 +1012,18 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Fix Dockerfile to build offline and run tests with --network none.")
         elif "missing required patch files" in issue.lower():
             suggestions.append("Provide both test.patch and solution.patch in the submission bundle.")
-        elif "added loc below required minimum" in issue.lower():
-            suggestions.append("Expand the solution to a >= 380 LOC change that genuinely implements required behavior (no padding).")
+        elif "added meaningful loc below required minimum" in issue.lower():
+            suggestions.append("Expand the hand-authored implementation to >= 380 meaningful LOC; generated outputs and boilerplate do not count.")
         elif "patch" in issue.lower() and "apply" in issue.lower():
             suggestions.append("Regenerate patches so they apply cleanly against the specified commit.")
         elif "alignment" in issue.lower() or "unspecified behavior" in issue.lower():
             suggestions.append("Align tests to the problem description and remove unstated requirements.")
+        elif "stronger interpretation" in issue.lower():
+            suggestions.append("Relax tests so they do not require a stronger interpretation than the spec explicitly states, or clarify the spec.")
+        elif "representation choice" in issue.lower():
+            suggestions.append("Avoid exact shape/order/count assertions unless the spec explicitly requires that representation.")
+        elif "valid interpretation" in issue.lower():
+            suggestions.append("Clarify the spec where multiple valid interpretations exist, or broaden tests to accept all valid behaviors.")
         elif "weak" in issue.lower() and "assert" in issue.lower():
             suggestions.append("Strengthen assertions to verify exact expected outputs.")
         elif "scope" in issue.lower():
@@ -906,6 +1038,10 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
     lines.append(summarize_problem(problem_analysis))
     lines.append("")
     lines.append(summarize_tests(test_analysis))
+    fairness_issues = test_analysis.get("fairness_issues", [])
+    if fairness_issues:
+        lines.append("")
+        lines.append("Alignment Risk: " + "; ".join(fairness_issues[:2]) + ".")
     lines.append("")
     lines.append(summarize_solution(solution_analysis))
     lines.append("")
@@ -915,8 +1051,10 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
     lines.append(f"- Word count: {word_count}")
     if stats:
         lines.append(
-            f"- Solution LOC added: {stats.get('added', 0)} (non-empty: {stats.get('code', 0)})"
+            f"- Solution LOC added: {stats.get('added', 0)} (meaningful: {stats.get('meaningful', 0)}, non-empty: {stats.get('code', 0)})"
         )
+        if stats.get("generated_files"):
+            lines.append(f"- Generated LOC excluded: {stats.get('generated_added', 0)}")
     if docker_results.get("skipped"):
         lines.append("- Docker verification skipped")
     else:
