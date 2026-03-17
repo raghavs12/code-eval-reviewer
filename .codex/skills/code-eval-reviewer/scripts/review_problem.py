@@ -145,6 +145,100 @@ def extract_test_cases(test_patch: str) -> List[str]:
     return cases
 
 
+def is_ignored_search_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    ignored_parts = [
+        "/.git/", "/node_modules/", "/vendor/", "/dist/", "/build/", "/coverage/", "/.venv/",
+        "/__pycache__/", "/target/", "/tmp/", "/generated/",
+    ]
+    return any(part in normalized for part in ignored_parts)
+
+
+def extract_test_requirement_tokens(test_patch: str) -> List[str]:
+    tokens = []
+    added_lines = [line[1:] for line in test_patch.splitlines() if line.startswith("+") and not line.startswith("+++ ")]
+    added_text = "\n".join(added_lines)
+
+    tokens.extend(re.findall(r"@([A-Za-z_][A-Za-z0-9_]*)", added_text))
+    tokens.extend(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*=", added_text))
+    tokens.extend(re.findall(r"['\"](--[A-Za-z0-9_-]+)['\"]", added_text))
+    tokens.extend(re.findall(r"['\"]([A-Za-z_][A-Za-z0-9_-]*mode)['\"]", added_text, re.IGNORECASE))
+    tokens.extend(re.findall(r"['\"]([A-Za-z_][A-Za-z0-9_-]*)['\"]\s*:", added_text))
+
+    filtered = []
+    ignore = {
+        "self", "cls", "true", "false", "none", "input", "output", "expected", "actual",
+        "kwargs", "args",
+    }
+    for token in tokens:
+        token_l = token.lower()
+        if len(token_l) < 3:
+            continue
+        if token_l in ignore:
+            continue
+        if re.fullmatch(r"[0-9_]+", token_l):
+            continue
+        filtered.append(token)
+    return list(dict.fromkeys(filtered))
+
+
+def count_token_mentions(repo_dir: Optional[Path], token: str, touched_test_files: List[str]) -> Dict[str, int]:
+    counts = {"docs": 0, "public": 0, "tests": 0}
+    if not repo_dir or not repo_dir.exists():
+        return counts
+
+    touched = {p.replace("\\", "/") for p in touched_test_files}
+    doc_exts = {".md", ".rst", ".txt"}
+    public_exts = {".py", ".go", ".rs", ".js", ".ts", ".tsx", ".jsx", ".java", ".c", ".cc", ".cpp", ".h"}
+
+    token_re = re.compile(rf"\b{re.escape(token)}\b")
+    for root, _, files in os.walk(repo_dir):
+        for name in files:
+            path = Path(root) / name
+            rel = str(path.relative_to(repo_dir)).replace("\\", "/")
+            rel_lower = rel.lower()
+            if is_ignored_search_path(rel_lower):
+                continue
+            if rel in touched:
+                continue
+            try:
+                text = read_text(path)
+            except Exception:
+                continue
+            if not token_re.search(text):
+                continue
+            if path.suffix.lower() in doc_exts or name.lower().startswith("readme"):
+                counts["docs"] += 1
+            elif "/test" in rel_lower or "/tests/" in rel_lower or name.lower().startswith("test_"):
+                counts["tests"] += 1
+            elif path.suffix.lower() in public_exts:
+                counts["public"] += 1
+    return counts
+
+
+def undocumented_surface_issues(desc_text: str, test_patch: str, repo_dir: Optional[Path]) -> List[str]:
+    issues = []
+    desc_tokens = set(tokenize(desc_text))
+    touched_test_files = re.findall(r"^\+\+\+\s+b/(.+)$", test_patch, re.MULTILINE)
+    candidate_tokens = extract_test_requirement_tokens(test_patch)
+
+    hidden_candidates = []
+    for token in candidate_tokens:
+        token_norm = token.lower().lstrip("-")
+        if token_norm in desc_tokens:
+            continue
+        counts = count_token_mentions(repo_dir, token, touched_test_files)
+        # Conservative threshold: flag only if the token is absent from docs and tests
+        # outside the added patch, and appears at most weakly in non-test code.
+        if counts["docs"] == 0 and counts["tests"] == 0 and counts["public"] <= 1:
+            hidden_candidates.append(token)
+
+    if hidden_candidates:
+        sample = ", ".join(hidden_candidates[:3])
+        issues.append(f"Tests may depend on undocumented or hard-to-discover API/configuration surface: {sample}.")
+    return issues
+
+
 def representation_choice_issues(desc_text: str, test_patch: str) -> List[str]:
     issues = []
     desc_lower = desc_text.lower()
@@ -609,6 +703,7 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     fairness_issues.extend(representation_choice_issues(desc_text, test_patch))
     fairness_issues.extend(stronger_than_spec_issues(contracts, desc_text, test_patch))
     fairness_issues.extend(multiple_valid_interpretations_issues(desc_text, test_patch))
+    fairness_issues.extend(undocumented_surface_issues(desc_text, test_patch, repo_dir))
     if fairness_issues:
         issues.extend(fairness_issues)
 
@@ -651,16 +746,12 @@ def is_generated_file_path(path: str) -> bool:
     base = os.path.basename(normalized)
     generated_patterns = [
         r"(^|/)(dist|build|vendor|vendors|node_modules)/",
-        r"(^|/).*generated.*$",
         r"\.pb\.go$",
         r"\.g\.cs$",
         r"\.designer\.",
         r"\.gen\.",
         r"\.generated\.",
         r"\.peg\.go$",
-        r"parser\.go$",
-        r"parser\.c$",
-        r"parser\.cc$",
         r"y\.go$",
     ]
     if any(re.search(pattern, normalized) for pattern in generated_patterns):
@@ -839,6 +930,7 @@ def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, 
         "solution_new_pass": False,
         "logs": {},
         "repo_dir": None,
+        "analysis_repo_dir": None,
     }
     if skip_docker:
         results["skipped"] = True
@@ -862,6 +954,10 @@ def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, 
         return results
 
     run_command(["git", "checkout", commit_hash], cwd=str(repo_dir))
+
+    analysis_repo_dir = work_dir / "analysis_repo"
+    shutil.copytree(repo_dir, analysis_repo_dir)
+    results["analysis_repo_dir"] = str(analysis_repo_dir)
 
     shutil.copy(dockerfile, repo_dir / "Dockerfile")
 
@@ -952,12 +1048,21 @@ def format_quality_score(score: int) -> str:
     return "\n".join(lines)
 
 
-def build_feedback(issues: List[str], decision: str) -> str:
+def build_feedback(issues: List[str], decision: str, fixable_issues: Optional[List[str]] = None) -> str:
+    fixable_issues = fixable_issues or []
     if decision == "Approve":
         return "Submission meets the quality bar. Problem and tests are strong, and the solution proves solvability without padding."
     if decision == "Reject":
-        return "Submission does not meet requirements. " + "; ".join(issues[:6])
-    return "Changes needed before acceptance. " + "; ".join(issues[:6])
+        message = "Submission does not meet requirements. " + "; ".join(issues[:6])
+        suggestions = fix_suggestions(issues)
+        if suggestions:
+            message += " Fixes: " + "; ".join(suggestions[:4])
+        return message
+    message = "Changes needed before acceptance. " + "; ".join(issues[:6])
+    suggestions = fix_suggestions(issues)
+    if suggestions:
+        message += " Fixes: " + "; ".join(suggestions[:4])
+    return message
 
 
 def summarize_problem(problem_analysis: Dict) -> str:
@@ -1024,6 +1129,8 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Avoid exact shape/order/count assertions unless the spec explicitly requires that representation.")
         elif "valid interpretation" in issue.lower():
             suggestions.append("Clarify the spec where multiple valid interpretations exist, or broaden tests to accept all valid behaviors.")
+        elif "undocumented or hard-to-discover api/configuration surface" in issue.lower():
+            suggestions.append("Avoid requiring undocumented flags/config/options in tests, or explicitly introduce and justify them in the problem statement.")
         elif "weak" in issue.lower() and "assert" in issue.lower():
             suggestions.append("Strengthen assertions to verify exact expected outputs.")
         elif "scope" in issue.lower():
@@ -1240,8 +1347,8 @@ def main():
     test_patch_text = read_text(test_patch_file) if test_patch_file else ""
     solution_patch_text = read_text(solution_patch_file) if solution_patch_file else ""
 
-    repo_dir = Path(docker_results["repo_dir"]) if docker_results.get("repo_dir") else None
-    test_analysis = analyze_tests(test_patch_text, main_desc, repo_dir, docker_results)
+    analysis_repo_dir = Path(docker_results["analysis_repo_dir"]) if docker_results.get("analysis_repo_dir") else None
+    test_analysis = analyze_tests(test_patch_text, main_desc, analysis_repo_dir, docker_results)
     solution_analysis = analyze_solution(solution_patch_text, docker_results)
 
     problem_checks = problem_analysis["checks"]
@@ -1282,7 +1389,7 @@ def main():
     if not issues:
         issues.append("No major issues found")
 
-    feedback_text = build_feedback(issues, decision)
+    feedback_text = build_feedback(issues, decision, fixable_issues)
 
     stats = solution_analysis.get("stats")
     reasoning = build_reasoning(
