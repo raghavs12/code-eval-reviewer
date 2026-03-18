@@ -57,6 +57,52 @@ def find_files(directory: Path, names: List[str]) -> List[Path]:
     return list(dict.fromkeys(found))
 
 
+def extract_embedded_file_from_setup(setup_text: str, target_name: str) -> Optional[str]:
+    escaped = re.escape(target_name)
+    patterns = [
+        rf"cat\s+>\s*{escaped}\s*<<['\"]?(\w+)['\"]?\s*\n([\s\S]*?)\n\1",
+        rf"cat\s+<<['\"]?(\w+)['\"]?\s*>\s*{escaped}\s*\n([\s\S]*?)\n\1",
+        rf"cat\s+>\s*['\"]?\.?/?{escaped}['\"]?\s*<<['\"]?(\w+)['\"]?\s*\n([\s\S]*?)\n\1",
+        rf"cat\s+<<['\"]?(\w+)['\"]?\s*>\s*['\"]?\.?/?{escaped}['\"]?\s*\n([\s\S]*?)\n\1",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, setup_text, re.MULTILINE)
+        if match:
+            return match.group(2)
+    return None
+
+
+def materialize_embedded_setup_files(problem_dir: Path, setup_file: Optional[Path]) -> Dict[str, Optional[Path]]:
+    result = {"Dockerfile": None, "test.patch": None}
+    if not setup_file or not setup_file.exists():
+        return result
+    setup_text = read_text(setup_file)
+    extract_dir = problem_dir / ".codex_extracted"
+    extract_dir.mkdir(exist_ok=True)
+    for name in result.keys():
+        content = extract_embedded_file_from_setup(setup_text, name)
+        if content is None:
+            continue
+        out_path = extract_dir / name
+        out_path.write_text(content.rstrip("\n") + "\n", encoding="utf-8")
+        result[name] = out_path
+    return result
+
+
+def detect_setup_extraction_expectations(setup_text: str) -> List[str]:
+    expected = []
+    for name in ["test.patch", "Dockerfile"]:
+        if re.search(rf"\b{name}\b", setup_text):
+            expected.append(name)
+    return expected
+
+
+def extract_test_sh_created_by_patch(test_patch_text: str) -> bool:
+    if not test_patch_text:
+        return False
+    return bool(re.search(r"^\+\+\+\s+b/test\.sh$", test_patch_text, re.MULTILINE))
+
+
 def count_words(text: str) -> int:
     text = re.sub(r"```[\s\S]*?```", "", text)
     text = re.sub(r"`[^`]+`", "", text)
@@ -143,6 +189,104 @@ def extract_test_cases(test_patch: str) -> List[str]:
     for m in re.findall(r"\\bfunc\\s+(Test\\w+)\\s*\\(", test_patch):
         cases.append(m)
     return cases
+
+
+def normalize_token_set(text: str) -> set:
+    return set(tokenize(text))
+
+
+def token_overlap_score(a: str, b: str) -> float:
+    ta = normalize_token_set(a)
+    tb = normalize_token_set(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / max(1, len(ta | tb))
+
+
+def extract_test_blocks(test_patch: str) -> List[Dict[str, object]]:
+    blocks = []
+    current = None
+    for raw_line in test_patch.splitlines():
+        if not raw_line.startswith("+") or raw_line.startswith("+++ "):
+            continue
+        line = raw_line[1:]
+        stripped = line.strip()
+        test_name = None
+        for pattern in [
+            r"def (test_[\w_]+)\s*\(",
+            r"\btest\(\s*['\"]([^'\"]+)['\"]",
+            r"\bit\(\s*['\"]([^'\"]+)['\"]",
+            r"\bfunc\s+(Test\w+)\s*\(",
+            r"#\[test\]\s*fn\s+(\w+)",
+        ]:
+            match = re.search(pattern, stripped)
+            if match:
+                test_name = match.group(1)
+                break
+        if test_name:
+            if current:
+                blocks.append(current)
+            current = {"name": test_name, "lines": [], "assertions": []}
+            continue
+        if not current:
+            continue
+        current["lines"].append(stripped)
+        if re.search(r"\b(assert|expect|require\.)\b", stripped):
+            current["assertions"].append(stripped)
+    if current:
+        blocks.append(current)
+    return blocks
+
+
+def summarize_assertion(assertion: str) -> str:
+    cleaned = re.sub(r"\s+", " ", assertion.strip())
+    return cleaned[:160]
+
+
+def build_alignment_tables(contracts: List[str], test_patch: str) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    spec_rows: List[Dict[str, str]] = []
+    assertion_rows: List[Dict[str, str]] = []
+    test_blocks = extract_test_blocks(test_patch)
+
+    for contract in contracts:
+        matches = []
+        for block in test_blocks:
+            corpus = " ".join([block["name"]] + list(block["lines"]) + list(block["assertions"]))
+            if token_overlap_score(contract, corpus) >= 0.16:
+                matches.append(str(block["name"]))
+        spec_rows.append(
+            {
+                "requirement": contract,
+                "tests": ", ".join(matches[:4]) if matches else "(none)",
+                "status": "Covered" if matches else "Untested",
+            }
+        )
+
+    for block in test_blocks:
+        assertions = block["assertions"] or block["lines"][:1] or [str(block["name"])]
+        for assertion in assertions[:4]:
+            best_contract = ""
+            best_score = 0.0
+            for contract in contracts:
+                score = token_overlap_score(assertion, contract)
+                if score > best_score:
+                    best_score = score
+                    best_contract = contract
+            assertion_rows.append(
+                {
+                    "assertion": f"{block['name']}: {summarize_assertion(assertion)}",
+                    "requirement": best_contract if best_score >= 0.14 else "(none)",
+                    "status": "Aligned" if best_score >= 0.14 else "Hidden Requirement",
+                }
+            )
+    return spec_rows, assertion_rows
+
+
+def format_table(headers: List[str], rows: List[List[str]]) -> List[str]:
+    lines = [" | ".join(headers), " | ".join(["---"] * len(headers))]
+    for row in rows:
+        lines.append(" | ".join(row))
+    return lines
 
 
 def is_ignored_search_path(path: str) -> bool:
@@ -533,6 +677,8 @@ def validate_repo(repo_url: Optional[str], description_text: str) -> Dict:
 def analyze_problem(text: str) -> Dict:
     word_count = count_words(text)
     issues = []
+    ambiguity_flags = []
+    prescriptiveness_flags = []
 
     ambiguous_terms = [
         "maybe", "probably", "approximately", "around", "as needed", "as appropriate",
@@ -556,6 +702,9 @@ def analyze_problem(text: str) -> Dict:
     no_ambiguity = not any(term in text.lower() for term in ambiguous_terms)
     if not no_ambiguity:
         issues.append("Ambiguous language present")
+        for sentence in sentences(text):
+            if any(term in sentence.lower() for term in ambiguous_terms):
+                ambiguity_flags.append(sentence)
 
     prescriptive = any(re.search(p, text, re.IGNORECASE) for p in prescriptive_patterns)
     concise = word_count <= 250
@@ -564,6 +713,9 @@ def analyze_problem(text: str) -> Dict:
         issues.append(f"Problem description too long ({word_count} words)")
     if prescriptive:
         issues.append("Problem description is prescriptive")
+        for sentence in sentences(text):
+            if any(re.search(p, sentence, re.IGNORECASE) for p in prescriptive_patterns):
+                prescriptiveness_flags.append(sentence)
 
     matches_scope = not any(term in text.lower() for term in scope_blowup)
     if not matches_scope:
@@ -589,6 +741,10 @@ def analyze_problem(text: str) -> Dict:
     issues.extend(implied)
     issues.extend(schema_issues)
     issues.extend(ambiguity_issues)
+    if implied or ambiguity_issues:
+        ambiguity_flags.extend(implied + ambiguity_issues)
+    if schema_issues:
+        prescriptiveness_flags.extend(schema_issues)
 
     checks = [
         ("Requirements are complete and self-contained", req_complete),
@@ -605,6 +761,8 @@ def analyze_problem(text: str) -> Dict:
         "issues": issues,
         "checks": checks,
         "contracts": split_compound_requirements(requirement_sentences(text)),
+        "ambiguity_flags": list(dict.fromkeys(ambiguity_flags)),
+        "prescriptiveness_flags": list(dict.fromkeys(prescriptiveness_flags)),
     }
 
 
@@ -638,7 +796,7 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
             ("No checks for unspecified behavior", False),
         ]
         issues.append("test.patch missing")
-        return {"checks": checks, "issues": issues}
+        return {"checks": checks, "issues": issues, "alignment": {"spec_rows": [], "assertion_rows": []}, "fairness_issues": []}
 
     exposes_missing = docker_results.get("new_only_fail", False)
     if not exposes_missing:
@@ -658,6 +816,8 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     assertions_ok = not (assert_lines and len(weak_asserts) == len(assert_lines))
     if not assertions_ok:
         issues.append("Assertions look weak or non-specific")
+    elif weak_asserts:
+        issues.append("Some assertions may allow a partial or wrong implementation to pass")
 
     internal_usage = bool(re.search(r"\._|/internal/|_private", test_patch))
     behavior_focused = not internal_usage
@@ -696,7 +856,12 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
 
     contracts = split_compound_requirements(requirement_sentences(desc_text))
     test_cases = extract_test_cases(test_patch)
+    spec_rows, assertion_rows = build_alignment_tables(contracts, test_patch)
     alignment_issues = spec_test_alignment(contracts, test_cases, test_patch)
+    if any(row["status"] == "Untested" for row in spec_rows):
+        alignment_issues.append("One or more explicit requirements appear untested.")
+    if any(row["status"] == "Hidden Requirement" for row in assertion_rows):
+        alignment_issues.append("One or more test assertions do not trace to an explicit requirement.")
     if alignment_issues:
         issues.extend(alignment_issues)
     fairness_issues = []
@@ -725,7 +890,13 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
         ("No redundant tests", no_redundancy),
         ("No checks for unspecified behavior", no_unspecified),
     ]
-    return {"checks": checks, "issues": issues, "fairness_issues": fairness_issues}
+    return {
+        "checks": checks,
+        "issues": list(dict.fromkeys(issues)),
+        "fairness_issues": fairness_issues,
+        "alignment": {"spec_rows": spec_rows, "assertion_rows": assertion_rows},
+        "weak_assertions": weak_asserts[:5],
+    }
 
 
 def is_comment_line(line: str) -> bool:
@@ -930,7 +1101,7 @@ def apply_patch_checked(patch_path: Path, repo_dir: Path) -> Tuple[bool, str]:
     return False, f"Patch fails to apply: {err}"
 
 
-def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, skip_docker: bool = False) -> Dict:
+def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, skip_docker: bool = False, extracted_files: Optional[Dict[str, Optional[Path]]] = None) -> Dict:
     results = {
         "build_success": False,
         "base_only_pass": False,
@@ -940,13 +1111,15 @@ def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, 
         "logs": {},
         "repo_dir": None,
         "analysis_repo_dir": None,
+        "extraction_errors": [],
     }
     if skip_docker:
         results["skipped"] = True
         return results
 
-    dockerfile = find_file(problem_dir, ["Dockerfile", "dockerfile"])
-    test_patch = find_file(problem_dir, ["test.patch"])
+    extracted_files = extracted_files or {}
+    dockerfile = find_file(problem_dir, ["Dockerfile", "dockerfile"]) or extracted_files.get("Dockerfile")
+    test_patch = find_file(problem_dir, ["test.patch"]) or extracted_files.get("test.patch")
     solution_patch = find_file(problem_dir, ["solution.patch"])
 
     if not dockerfile:
@@ -956,63 +1129,67 @@ def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, 
     work_dir = Path(tempfile.mkdtemp(prefix="review_work_"))
     repo_dir = work_dir / "repo"
     results["repo_dir"] = str(repo_dir)
+    image_name = f"shipd/{work_dir.name}"
 
-    code, _, stderr = run_command(["git", "clone", repo_url, "repo"], cwd=str(work_dir))
-    if code != 0:
-        results["error"] = f"Git clone failed: {stderr}"
-        return results
+    try:
+        code, _, stderr = run_command(["git", "clone", repo_url, "repo"], cwd=str(work_dir))
+        if code != 0:
+            results["error"] = f"Git clone failed: {stderr}"
+            return results
 
-    run_command(["git", "checkout", commit_hash], cwd=str(repo_dir))
+        run_command(["git", "checkout", commit_hash], cwd=str(repo_dir))
 
-    analysis_repo_dir = work_dir / "analysis_repo"
-    shutil.copytree(repo_dir, analysis_repo_dir)
-    results["analysis_repo_dir"] = str(analysis_repo_dir)
+        analysis_repo_dir = work_dir / "analysis_repo"
+        shutil.copytree(repo_dir, analysis_repo_dir)
+        results["analysis_repo_dir"] = str(analysis_repo_dir)
 
-    shutil.copy(dockerfile, repo_dir / "Dockerfile")
+        shutil.copy(dockerfile, repo_dir / "Dockerfile")
 
-    image_name = f"shipd/{repo_dir.name}"
-    code, _, stderr = run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
-    if code != 0:
-        results["error"] = f"Docker build failed: {stderr}"
-        return results
-    results["build_success"] = True
-
-    code, stdout, stderr = run_command(
-        ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh base"],
-        cwd=str(repo_dir),
-    )
-    results["base_only_pass"] = (code == 0)
-    results["logs"]["base_only"] = stdout + stderr
-
-    if test_patch:
-        apply_patch_checked(test_patch, repo_dir)
-        run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
-        code, stdout, stderr = run_command(
-            ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh new"],
-            cwd=str(repo_dir),
-        )
-        results["new_only_fail"] = (code != 0)
-        results["logs"]["new_without_solution"] = stdout + stderr
-
-    if solution_patch:
-        apply_patch_checked(solution_patch, repo_dir)
-        run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
+        code, _, stderr = run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
+        if code != 0:
+            results["error"] = f"Docker build failed: {stderr}"
+            return results
+        results["build_success"] = True
 
         code, stdout, stderr = run_command(
             ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh base"],
             cwd=str(repo_dir),
         )
-        results["solution_base_pass"] = (code == 0)
-        results["logs"]["base_with_solution"] = stdout + stderr
+        results["base_only_pass"] = (code == 0)
+        results["logs"]["base_only"] = stdout + stderr
 
-        code, stdout, stderr = run_command(
-            ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh new"],
-            cwd=str(repo_dir),
-        )
-        results["solution_new_pass"] = (code == 0)
-        results["logs"]["new_with_solution"] = stdout + stderr
+        if test_patch:
+            apply_patch_checked(test_patch, repo_dir)
+            run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
+            code, stdout, stderr = run_command(
+                ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh new"],
+                cwd=str(repo_dir),
+            )
+            results["new_only_fail"] = (code != 0)
+            results["logs"]["new_without_solution"] = stdout + stderr
 
-    return results
+        if solution_patch:
+            apply_patch_checked(solution_patch, repo_dir)
+            run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
+
+            code, stdout, stderr = run_command(
+                ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh base"],
+                cwd=str(repo_dir),
+            )
+            results["solution_base_pass"] = (code == 0)
+            results["logs"]["base_with_solution"] = stdout + stderr
+
+            code, stdout, stderr = run_command(
+                ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh new"],
+                cwd=str(repo_dir),
+            )
+            results["solution_new_pass"] = (code == 0)
+            results["logs"]["new_with_solution"] = stdout + stderr
+
+        return results
+    finally:
+        run_command(["docker", "image", "rm", "-f", image_name], cwd=str(work_dir), capture=True, timeout=120)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def rating_from_checks(checks: List[Tuple[str, bool]], major_fail_names: List[str]) -> int:
@@ -1057,21 +1234,202 @@ def format_quality_score(score: int) -> str:
     return "\n".join(lines)
 
 
+def extract_requested_changes(feedback_text: str) -> List[str]:
+    changes = []
+    current_section = None
+    for raw_line in feedback_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if lower in {"changes required", "changes still required", "fixes:"}:
+            current_section = lower
+            continue
+        if lower in {"reasoning", "checklist", "quality score", "decision:", "feedback"}:
+            current_section = None
+            continue
+        if current_section and (line.startswith("-") or line.startswith("*") or re.match(r"^\[\s?[x ]?\]\s+", line)):
+            changes.append(re.sub(r"^[-*]\s+|^\[\s?[x ]?\]\s+", "", line).strip())
+            continue
+        if "fixes:" in lower:
+            tail = raw_line.split("Fixes:", 1)[1]
+            changes.extend([part.strip(" .") for part in tail.split(";") if part.strip()])
+    return list(dict.fromkeys(changes))
+
+
+def classify_issue(issue: str) -> str:
+    lower = issue.lower()
+    if "ambigu" in lower:
+        return "ambiguity"
+    if "prescriptive" in lower or "schema/structure" in lower:
+        return "prescriptiveness"
+    if "undocumented or hard-to-discover api/configuration" in lower:
+        return "undocumented_surface"
+    if "unspecified behavior" in lower or "hidden requirement" in lower:
+        return "hidden_requirement"
+    if "stronger interpretation" in lower or "representation choice" in lower or "valid interpretation" in lower:
+        return "fairness_alignment"
+    if "assert" in lower and ("weak" in lower or "partial or wrong implementation" in lower):
+        return "assertion_strength"
+    if "determinism" in lower or "nondeterminism" in lower:
+        return "determinism"
+    if "docker" in lower or "patch fails to apply" in lower or "git clone failed" in lower:
+        return "docker_or_patch"
+    if "meaningful loc" in lower:
+        return "meaningful_loc"
+    if "meaningful files" in lower:
+        return "meaningful_files"
+    if "padding" in lower or "dead/unnecessary code" in lower or "ai-generated slop" in lower:
+        return "padding_or_slop"
+    if "api changes" in lower:
+        return "api_breakage"
+    if "scope" in lower:
+        return "scope"
+    if "self-contained" in lower:
+        return "self_contained"
+    if "repo" in lower or "license" in lower or "stars" in lower or "pr" in lower:
+        return "repo_gate"
+    return "other"
+
+
+def classify_feedback_item(item: str, current_issues: List[str]) -> Tuple[str, str]:
+    item_category = classify_issue(item)
+    related = [issue for issue in current_issues if classify_issue(issue) == item_category]
+    if not related:
+        return "ADDRESSED", "No matching current issue category found."
+    if any(token_overlap_score(item, issue) >= 0.20 for issue in related):
+        return "NOT ADDRESSED", f"Still present: {related[0]}"
+    return "PARTIAL", f"Related issue category still present: {related[0]}"
+
+
+def analyze_rereview(previous_feedback_text: str, current_issues: List[str]) -> Dict:
+    items = extract_requested_changes(previous_feedback_text)
+    rows = []
+    addressed = 0
+    for item in items:
+        status, notes = classify_feedback_item(item, current_issues)
+        if status == "ADDRESSED":
+            addressed += 1
+        rows.append({"item": item, "status": status, "notes": notes})
+    summary = f"{addressed}/{len(items)} prior requested changes addressed" if items else "No prior requested changes parsed"
+    incomplete = any(row["status"] != "ADDRESSED" for row in rows)
+    prior_categories = {classify_issue(item) for item in items}
+    new_issues = []
+    for issue in current_issues:
+        if classify_issue(issue) not in prior_categories:
+            new_issues.append(issue)
+    return {
+        "items": rows,
+        "summary": summary,
+        "incomplete": incomplete,
+        "new_issues": list(dict.fromkeys(new_issues)),
+    }
+
+
 def build_feedback(issues: List[str], decision: str, fixable_issues: Optional[List[str]] = None) -> str:
     fixable_issues = fixable_issues or []
     if decision == "Approve":
         return "Submission meets the quality bar. Problem and tests are strong, and the solution proves solvability without padding."
     if decision == "Reject":
-        message = "Submission does not meet requirements. " + "; ".join(issues[:6])
-        suggestions = fix_suggestions(issues)
-        if suggestions:
-            message += " Fixes: " + "; ".join(suggestions[:4])
-        return message
-    message = "Changes needed before acceptance. " + "; ".join(issues[:6])
-    suggestions = fix_suggestions(issues)
-    if suggestions:
-        message += " Fixes: " + "; ".join(suggestions[:4])
-    return message
+        return "Submission does not meet requirements. " + "; ".join(issues[:6])
+    return "Changes needed before acceptance. " + "; ".join((fixable_issues or issues)[:6])
+
+
+def format_bullets(items: List[str], empty_text: str = "None found") -> List[str]:
+    if not items:
+        return [empty_text]
+    return [f"- {item}" for item in items]
+
+
+def format_alignment_section(test_analysis: Dict) -> List[str]:
+    lines = ["Spec-Test Alignment", "Optional", "Spec Requirement Coverage"]
+    spec_rows = test_analysis.get("alignment", {}).get("spec_rows", [])
+    assertion_rows = test_analysis.get("alignment", {}).get("assertion_rows", [])
+    if spec_rows:
+        lines.extend(
+            format_table(
+                ["Spec Requirement", "Covered by Test(s)", "Status"],
+                [[row["requirement"], row["tests"], row["status"]] for row in spec_rows],
+            )
+        )
+    else:
+        lines.append("No explicit requirement rows available.")
+    lines.append("")
+    lines.append("Test Assertion Alignment")
+    if assertion_rows:
+        lines.extend(
+            format_table(
+                ["Test Assertion", "Traces to Spec Requirement", "Status"],
+                [[row["assertion"], row["requirement"], row["status"]] for row in assertion_rows],
+            )
+        )
+    else:
+        lines.append("No explicit assertion rows available.")
+    return lines
+
+
+def format_feedback_incorporation_section(rereview: Optional[Dict]) -> List[str]:
+    if not rereview:
+        return []
+    lines = ["Feedback Incorporation", "Optional"]
+    rows = rereview.get("items", [])
+    if rows:
+        lines.extend(
+            format_table(
+                ["Feedback Item", "Status", "Notes"],
+                [[row["item"], row["status"], row["notes"]] for row in rows],
+            )
+        )
+    else:
+        lines.append("No prior requested changes found.")
+    lines.append(f"Summary: {rereview.get('summary', 'No summary')}")
+    new_issues = rereview.get("new_issues", [])
+    if new_issues:
+        lines.append("New Issues Introduced:")
+        lines.extend(format_bullets(new_issues))
+    else:
+        lines.append("New Issues Introduced:")
+        lines.append("None found")
+    return lines
+
+
+def init_stage_results() -> Dict[str, Dict[str, str]]:
+    return {
+        "stage_0_rereview": {"name": "Feedback Incorporation Check", "status": "not_applicable", "notes": ""},
+        "stage_1_inputs": {"name": "Input Validation", "status": "pending", "notes": ""},
+        "stage_2_similarity": {"name": "Similarity Gate", "status": "pending", "notes": ""},
+        "stage_3_repo": {"name": "Repository Gate", "status": "pending", "notes": ""},
+        "stage_4_problem": {"name": "Problem Audit", "status": "pending", "notes": ""},
+        "stage_5_tests": {"name": "Test Fairness Audit", "status": "pending", "notes": ""},
+        "stage_6_docker": {"name": "Docker Verification", "status": "pending", "notes": ""},
+        "stage_7_solution": {"name": "Solution Audit", "status": "pending", "notes": ""},
+        "stage_8_decision": {"name": "Decision Synthesis", "status": "pending", "notes": ""},
+    }
+
+
+def set_stage(stage_results: Dict[str, Dict[str, str]], key: str, status: str, notes: str) -> None:
+    stage_results[key]["status"] = status
+    stage_results[key]["notes"] = notes
+
+
+def stage_lines(stage_results: Dict[str, Dict[str, str]]) -> List[str]:
+    lines = ["Stages:"]
+    for key in [
+        "stage_0_rereview",
+        "stage_1_inputs",
+        "stage_2_similarity",
+        "stage_3_repo",
+        "stage_4_problem",
+        "stage_5_tests",
+        "stage_6_docker",
+        "stage_7_solution",
+        "stage_8_decision",
+    ]:
+        stage = stage_results[key]
+        lines.append(f"- {stage['name']}: {stage['status']}")
+        if stage["notes"]:
+            lines.append(f"  {stage['notes']}")
+    return lines
 
 
 def summarize_problem(problem_analysis: Dict) -> str:
@@ -1125,7 +1483,7 @@ def fix_suggestions(issues: List[str]) -> List[str]:
         elif "docker build failed" in issue.lower() or "dockerfile" in issue.lower():
             suggestions.append("Fix Dockerfile to build offline and run tests with --network none.")
         elif "missing required patch files" in issue.lower():
-            suggestions.append("Provide both test.patch and solution.patch in the submission bundle.")
+            suggestions.append("Provide solution.patch and ensure test.patch is available either directly or embedded in setup.sh.")
         elif "added meaningful loc below required minimum" in issue.lower():
             suggestions.append("Expand the hand-authored implementation to >= 380 meaningful LOC; generated outputs and boilerplate do not count.")
         elif "changed meaningful files below required minimum" in issue.lower():
@@ -1144,15 +1502,23 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Avoid requiring undocumented flags/config/options in tests, or explicitly introduce and justify them in the problem statement.")
         elif "weak" in issue.lower() and "assert" in issue.lower():
             suggestions.append("Strengthen assertions to verify exact expected outputs.")
+        elif "partial or wrong implementation" in issue.lower():
+            suggestions.append("Tighten assertions so incorrect or partial implementations cannot pass.")
         elif "scope" in issue.lower():
             suggestions.append("Reduce scope to a realistic change that fits the repo's purpose.")
         elif "prescriptive" in issue.lower():
             suggestions.append("Rewrite the spec to describe behavior, not implementation steps.")
+        elif "prior requested changes were not fully addressed" in issue.lower():
+            suggestions.append("Address every previously requested change explicitly and confirm each one in the resubmission.")
+        elif "new issues were introduced in the updated submission" in issue.lower():
+            suggestions.append("Fix the newly introduced issues before resubmitting; a re-review must address old feedback without creating new problems.")
     return list(dict.fromkeys(suggestions))
 
 
-def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analysis: Dict, docker_results: Dict, word_count: int, stats: Optional[Dict], decision: str, fixable_issues: List[str]) -> str:
+def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analysis: Dict, docker_results: Dict, word_count: int, stats: Optional[Dict], decision: str, fixable_issues: List[str], stage_results: Dict[str, Dict[str, str]], rereview: Optional[Dict]) -> str:
     lines = []
+    lines.extend(stage_lines(stage_results))
+    lines.append("")
     lines.append(summarize_problem(problem_analysis))
     lines.append("")
     lines.append(summarize_tests(test_analysis))
@@ -1160,6 +1526,10 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
     if fairness_issues:
         lines.append("")
         lines.append("Alignment Risk: " + "; ".join(fairness_issues[:2]) + ".")
+    weak_assertions = test_analysis.get("weak_assertions", [])
+    if weak_assertions:
+        lines.append("")
+        lines.append("Assertion Strength: Some assertions may allow a partial or wrong implementation to pass.")
     lines.append("")
     lines.append(summarize_solution(solution_analysis))
     lines.append("")
@@ -1181,6 +1551,8 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
         lines.append(f"- Docker new fail (pre-solution): {docker_results.get('new_only_fail', False)}")
         lines.append(f"- Docker base pass (with solution): {docker_results.get('solution_base_pass', False)}")
         lines.append(f"- Docker new pass (with solution): {docker_results.get('solution_new_pass', False)}")
+    if rereview:
+        lines.append(f"- Re-review summary: {rereview.get('summary', 'n/a')}")
     if decision == "Request Changes":
         lines.append("")
         lines.append("Fixes:")
@@ -1207,10 +1579,15 @@ def main():
         print(f"Error: Problem directory not found: {problem_dir}")
         raise SystemExit(1)
 
+    stage_results = init_stage_results()
+
     setup_file = find_file(problem_dir, ["setup.sh"])
     desc_files = find_files(problem_dir, ["Problem-Description.txt", "description.md", "problem.md"])
     test_patch_file = find_file(problem_dir, ["test.patch"])
     solution_patch_file = find_file(problem_dir, ["solution.patch"])
+    prior_feedback_file = find_file(problem_dir, ["feedback.md"])
+    extracted_files = materialize_embedded_setup_files(problem_dir, setup_file)
+    test_patch_file = test_patch_file or extracted_files.get("test.patch")
 
     repo_url = args.repo_url
     commit_hash = args.commit
@@ -1219,22 +1596,51 @@ def main():
         setup_url, setup_commit = extract_repo_info_from_setup(setup_file)
         repo_url = repo_url or setup_url
         commit_hash = commit_hash or setup_commit
+        setup_text = read_text(setup_file)
+        expected_embeds = detect_setup_extraction_expectations(setup_text)
+    else:
+        expected_embeds = []
 
     if not desc_files:
         print("Error: No problem description found")
         raise SystemExit(1)
 
+    input_notes = []
+    test_sh_from_patch = bool(test_patch_file and extract_test_sh_created_by_patch(read_text(test_patch_file)))
+    input_notes.append(f"repo_url={repo_url or 'missing'}")
+    input_notes.append(f"commit={commit_hash or 'missing'}")
+    input_notes.append(f"test_patch={'yes' if test_patch_file else 'no'}")
+    input_notes.append(f"solution_patch={'yes' if solution_patch_file else 'no'}")
+    dockerfile_path = find_file(problem_dir, ['Dockerfile', 'dockerfile']) or extracted_files.get('Dockerfile')
+    input_notes.append(f"dockerfile={'yes' if dockerfile_path else 'no'}")
+    input_notes.append(f"test_sh_from_patch={'yes' if test_sh_from_patch else 'no'}")
+    for expected_name in expected_embeds:
+        if expected_name == "test.patch" and not test_patch_file:
+            input_notes.append("setup_extract_error=test.patch not extracted")
+        if expected_name == "Dockerfile" and not dockerfile_path:
+            input_notes.append("setup_extract_error=Dockerfile not extracted")
+    input_notes.append(f"prior_feedback={'yes' if prior_feedback_file else 'no'}")
+    set_stage(stage_results, "stage_1_inputs", "completed", "; ".join(input_notes))
+
     main_desc = read_text(desc_files[0])
     extra_descs = [read_text(p) for p in desc_files[1:]]
     similar_list = parse_similar_problems_section(main_desc)
     extra_descs.extend(similar_list)
+    prior_feedback_text = ""
+    if prior_feedback_file and prior_feedback_file.resolve() != (problem_dir / args.output).resolve():
+        prior_feedback_text = read_text(prior_feedback_file)
+    elif prior_feedback_file and prior_feedback_file.exists():
+        prior_feedback_text = read_text(prior_feedback_file)
+    rereview = None
 
     similarity_detected, sim_reports = (False, [])
     if extra_descs:
         similarity_detected, sim_reports = detect_similarity(main_desc, extra_descs)
 
     if similarity_detected:
-        reasoning = ["Similarity detected. Review halted."] + sim_reports
+        set_stage(stage_results, "stage_2_similarity", "completed", "; ".join(sim_reports[:2]))
+        set_stage(stage_results, "stage_8_decision", "completed", "Rejected at similarity gate")
+        reasoning_text = "\n".join(["Stages:", "- Feedback Incorporation Check: not_applicable", "- Input Validation: completed", "- Similarity Gate: completed", "  Similarity detected", "- Repository Gate: pending", "- Problem Audit: pending", "- Test Fairness Audit: pending", "- Docker Verification: pending", "- Solution Audit: pending", "- Decision Synthesis: completed", "  decision=Reject; quality_score=1", "", "Similarity detected. Review halted."] + sim_reports)
         output = [
             "Submit Review",
             "",
@@ -1252,6 +1658,22 @@ def main():
             "Feedback",
             "Sent to the author",
             "Similarity detected between problem statements. Rejecting without further review.",
+            "",
+            "Ambiguity Flags",
+            "Optional",
+            "None found",
+            "",
+            "Prescriptiveness Flags",
+            "Optional",
+            "None found",
+            "",
+            "Spec-Test Alignment",
+            "Optional",
+            "Not evaluated because the review stopped at the similarity gate.",
+            "",
+            "Changes Required",
+            "Optional",
+            "- Submit a materially different problem statement.",
             "",
             "Checklist",
             "",
@@ -1340,20 +1762,39 @@ def main():
             "",
             "Reasoning",
             "Optional",
-            "\n".join(reasoning),
+            reasoning_text,
         ]
         output_path = problem_dir / args.output
         output_path.write_text("\n".join(output), encoding="utf-8")
         print(f"Feedback written to: {output_path}")
         return
+    set_stage(stage_results, "stage_2_similarity", "completed", "No material similarity detected")
 
     repo_validation = validate_repo(repo_url, main_desc)
+    repo_stage_status = "completed" if not repo_validation["reject_reasons"] else "completed"
+    set_stage(
+        stage_results,
+        "stage_3_repo",
+        repo_stage_status,
+        "; ".join(repo_validation["issues"][:3] or ["Repository checks passed"]),
+    )
 
     docker_results = {}
     if repo_url and commit_hash:
-        docker_results = run_docker_verification(problem_dir, repo_url, commit_hash, args.skip_docker)
+        docker_results = run_docker_verification(problem_dir, repo_url, commit_hash, args.skip_docker, extracted_files=extracted_files)
     else:
         docker_results = {"skipped": True}
+    docker_notes = []
+    if docker_results.get("skipped"):
+        docker_notes.append("Docker verification skipped")
+    elif docker_results.get("error"):
+        docker_notes.append(docker_results["error"])
+    else:
+        docker_notes.append(f"base={docker_results.get('base_only_pass', False)}")
+        docker_notes.append(f"new_pre={docker_results.get('new_only_fail', False)}")
+        docker_notes.append(f"base_post={docker_results.get('solution_base_pass', False)}")
+        docker_notes.append(f"new_post={docker_results.get('solution_new_pass', False)}")
+    set_stage(stage_results, "stage_6_docker", "completed", "; ".join(docker_notes))
 
     problem_analysis = analyze_problem(main_desc)
     test_patch_text = read_text(test_patch_file) if test_patch_file else ""
@@ -1362,6 +1803,44 @@ def main():
     analysis_repo_dir = Path(docker_results["analysis_repo_dir"]) if docker_results.get("analysis_repo_dir") else None
     test_analysis = analyze_tests(test_patch_text, main_desc, analysis_repo_dir, docker_results)
     solution_analysis = analyze_solution(solution_patch_text, docker_results)
+    current_predecision_issues = []
+    current_predecision_issues.extend(problem_analysis["issues"])
+    current_predecision_issues.extend(test_analysis["issues"])
+    current_predecision_issues.extend(solution_analysis["issues"])
+    if prior_feedback_text:
+        rereview = analyze_rereview(prior_feedback_text, current_predecision_issues)
+        rereview_notes = [rereview["summary"]]
+        if rereview.get("new_issues"):
+            rereview_notes.append(f"new_issues={len(rereview['new_issues'])}")
+        else:
+            rereview_notes.append("new_issues=0")
+        set_stage(stage_results, "stage_0_rereview", "completed", "; ".join(rereview_notes))
+    else:
+        set_stage(stage_results, "stage_0_rereview", "not_applicable", "No prior feedback.md found; treating as initial review")
+    set_stage(
+        stage_results,
+        "stage_4_problem",
+        "completed",
+        "; ".join(problem_analysis["issues"][:3] or [f"Word count={problem_analysis['word_count']}"]),
+    )
+    set_stage(
+        stage_results,
+        "stage_5_tests",
+        "completed",
+        "; ".join(
+            (["5A coverage complete", "5B fairness complete"] + (test_analysis["issues"][:2] or ["No major test fairness issues"]))
+        ),
+    )
+    solution_stats = solution_analysis.get("stats") or {}
+    solution_notes = []
+    if solution_analysis["issues"]:
+        solution_notes.extend(solution_analysis["issues"][:3])
+    else:
+        solution_notes.append("No major solution issues")
+    if solution_stats:
+        solution_notes.append(f"meaningful_loc={solution_stats.get('meaningful', 0)}")
+        solution_notes.append(f"meaningful_files={solution_stats.get('meaningful_file_count', 0)}")
+    set_stage(stage_results, "stage_7_solution", "completed", "; ".join(solution_notes))
 
     problem_checks = problem_analysis["checks"]
     test_checks = test_analysis["checks"]
@@ -1384,13 +1863,23 @@ def main():
             fixable_issues.append("New tests do not fail on base commit")
         if solution_patch_file and (not docker_results.get("solution_new_pass", False) or not docker_results.get("solution_base_pass", False)):
             fixable_issues.append("Tests do not pass with solution applied")
+    if rereview and rereview["incomplete"]:
+        fixable_issues.append("Prior requested changes were not fully addressed")
+    if rereview and rereview.get("new_issues"):
+        fixable_issues.append("New issues were introduced in the updated submission")
 
     if reject_reasons:
         decision = "Reject"
-    elif quality_score >= 5 and not fixable_issues and not problem_analysis["issues"] and not test_analysis["issues"] and not solution_analysis["issues"]:
+    elif quality_score >= 5 and not fixable_issues and not problem_analysis["issues"] and not test_analysis["issues"] and not solution_analysis["issues"] and not (rereview and rereview["incomplete"]):
         decision = "Approve"
     else:
         decision = "Request Changes"
+    set_stage(
+        stage_results,
+        "stage_8_decision",
+        "completed",
+        f"decision={decision}; quality_score={quality_score}",
+    )
 
     issues = []
     issues.extend(repo_validation["issues"])
@@ -1413,6 +1902,8 @@ def main():
         stats,
         decision,
         fixable_issues,
+        stage_results,
+        rereview,
     )
 
     problem_block, problem_yes = format_checklist(problem_checks)
@@ -1437,6 +1928,28 @@ def main():
         "Sent to the author",
         feedback_text,
         "",
+    ]
+    if rereview:
+        output_lines.extend(format_feedback_incorporation_section(rereview))
+        output_lines.append("")
+    output_lines.extend([
+        "Ambiguity Flags",
+        "Optional",
+        *format_bullets(problem_analysis.get("ambiguity_flags", [])),
+        "",
+        "Prescriptiveness Flags",
+        "Optional",
+        *format_bullets(problem_analysis.get("prescriptiveness_flags", [])),
+        "",
+    ])
+    output_lines.extend(format_alignment_section(test_analysis))
+    output_lines.append("")
+    changes_required = fix_suggestions(fixable_issues or issues)
+    output_lines.extend([
+        "Changes Required",
+        "Optional",
+        *format_bullets(changes_required, "No specific changes required."),
+        "",
         "Checklist",
         "",
         "Optional",
@@ -1459,7 +1972,7 @@ def main():
         "Reasoning",
         "Optional",
         reasoning,
-    ]
+    ])
 
     output_path = problem_dir / args.output
     output_path.write_text("\n".join(output_lines), encoding="utf-8")

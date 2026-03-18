@@ -16,6 +16,21 @@ Does not meet requirements
 Feedback
 Sent to the author
 
+Feedback Incorporation
+Optional
+
+Ambiguity Flags
+Optional
+
+Prescriptiveness Flags
+Optional
+
+Spec-Test Alignment
+Optional
+
+Changes Required
+Optional
+
 Checklist
 
 Optional

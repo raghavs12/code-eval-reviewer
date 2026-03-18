@@ -7,58 +7,244 @@ description: Review Shipd MARS project submissions using problem inputs as sourc
 
 ## Focus
 - Primary: problem quality and test completeness/fairness.
-- Secondary: solution solvability, LOC threshold, and padding/dead code checks.
+- Secondary: solution solvability, meaningful LOC/file-count thresholds, and padding/dead code checks.
 
-## Workflow Overview
-1. Parse inputs: setup.sh, Problem-Description.txt, test.patch, solution.patch, Dockerfile, test.sh.
-2. Similarity gate: if multiple problem descriptions are provided or the problem description includes a "Similar Problems" section listing other problems, run the similarity prompt. If any similarity is detected, stop and write feedback.md with decision Reject.
-3. Repository validation (hard requirements): GitHub URL + commit, recent activity, stars, license, language, no open or merged PR that already fixes the same problem. If any fail, reject.
-4. Docker verification: run base/new tests pre-solution, then with solution. If `git apply --check` fails only due to CRLF line endings in patch files, normalize patch files to LF and retry. Treat this as an environment normalization step, not a submission issue.
-5. Evaluate Problem checklist (7) and Tests checklist (8) from references/creating-challenges.md.
-6. Spec/Test alignment audit (required):
-   - Extract explicit contracts (must/should) and split combined statements.
-   - Flag implied contracts and over-prescriptive schemas.
-   - Map each test to one or more contracts; flag hidden requirements.
-   - Flag ambiguous semantics and internal leakage assertions.
-   - Flag tests that require a stronger interpretation than the spec states.
-   - Flag representation-choice assertions (exact shape, ordering, normalization, canonicalization, inlining, flattening, specific counts) unless the spec requires them explicitly.
-   - When multiple valid interpretations exist, mark tests unfair if they silently force one interpretation.
-   - Audit public-API legitimacy conservatively: if a test-only requirement depends on a kwarg, flag, decorator, config option, or supported mode that is not stated in the problem and is not clearly discoverable from the repo's public/documented surface, flag it as a hidden requirement.
-   - Distinguish documented public surface from merely available implementation details. Do not flag unless the evidence suggests the requirement is genuinely hard to discover.
-7. Evaluate Solution & Code checklist (6) with emphasis on solvability, meaningful LOC >= 380, meaningful file changes >= 3, and padding/dead code. Count only meaningful hand-authored changes; exclude generated outputs and similar boilerplate artifacts. Agent-run thresholds are externally verified.
-8. Assign overall quality score 1-7 using references/reviewer-rubric-2026.md.
-9. Write feedback.md in the repo root using references/feedback-template.md. Include Reasoning in feedback.md only (no review_log.md).
+## Operating Rule
+Run the review stage by stage. Do not jump to the verdict early. Complete every required stage unless a stage explicitly says to stop on Reject.
 
-## Input Files
+## Optional Pre-Stage: Re-Review Check
 
-| File | Contents |
-|------|----------|
-| setup.sh | Repo URL, commit hash, test patch, Dockerfile, test.sh |
-| Problem-Description.txt | Task brief, requirements, test assumptions |
-| test.patch | Test patch (git diff format) |
-| solution.patch | Solution patch (git diff format) |
+### Goal
+If `feedback.md` already exists in the review directory, treat the run as a re-review. Verify whether the previous requested changes were actually addressed, and also check for any new issues introduced in the updated submission files, before running the normal review.
+
+### Actions
+1. Detect re-review mode when `feedback.md` already exists in the review directory.
+2. Parse the previously requested fixes or `Changes Required` items.
+3. Classify each item as `ADDRESSED`, `PARTIAL`, or `NOT ADDRESSED`.
+4. Explicitly check whether the updated `setup.sh`, `Problem-Description.txt`, or `solution.patch` introduced any new issues beyond the old feedback. If `setup.sh` embeds `test.patch`, `Dockerfile`, or `test.sh`, treat changes to those embedded artifacts as part of the same check.
+5. Still run the full normal review after this check. Do not short-circuit the rest of the workflow.
+
+### Decision Rules
+- `Request Changes`: prior requested fixes are not fully addressed, or new fixable issues were introduced in the updated submission.
+- `Continue`: no prior feedback was provided, or all requested changes were addressed.
+
+### Required Notes
+- Whether re-review mode was triggered
+- Per-item incorporation status
+- Re-review summary
+- Any new issues introduced since the previous review
+
+## Stage 1: Input Validation
+
+### Goal
+Confirm the review directory is reviewable and extract the base context.
+
+### Actions
+1. Find and parse `setup.sh`, `Problem-Description.txt`, and `solution.patch`.
+2. If `test.patch` or `Dockerfile` are not present as separate files, extract them from `setup.sh`.
+3. Treat `test.sh` as satisfied when it is created by `test.patch`.
+4. Extract repository URL and commit hash.
+5. Record any missing files.
+
+### Decision Rules
+- `Reject`: not used in this stage by itself.
+- `Request Changes`: missing required files or malformed review directory.
+- `Continue`: base inputs are present.
+
+### Required Notes
+- Repository URL
+- Commit hash
+- Presence/absence of required files, including whether `Dockerfile` and `test.patch` were extracted from `setup.sh` and whether `test.sh` is created by `test.patch`
+
+## Stage 2: Similarity Gate
+
+### Goal
+Reject duplicate or highly similar problems before spending time on deeper review.
+
+### Actions
+1. If multiple problem descriptions are provided, or the description includes a `Similar Problems` section, run the similarity prompt below.
+2. Compare P1 against every additional problem statement.
+
+### Decision Rules
+- `Reject`: any problem is materially similar.
+- `Continue`: no meaningful similarity found.
+
+### Required Notes
+- Whether similarity check ran
+- Similarity findings if triggered
+
+## Stage 3: Repository Gate
+
+### Goal
+Eliminate non-fixable repo-level failures early.
+
+### Actions
+1. Validate repository hard requirements from `references/creating-challenges.md`.
+2. Check stars, activity, license, language, and public GitHub accessibility.
+3. Search for open or merged PRs that already solve the same problem.
+
+### Decision Rules
+- `Reject`: wrong license, invalid repo, inactive repo, unsupported language, duplicate/existing PR, or other non-fixable repo-level failure.
+- `Continue`: repo is valid.
+
+### Required Notes
+- Stars
+- Last activity
+- License
+- Language
+- Existing PR findings
+
+## Stage 4: Problem Audit
+
+### Goal
+Review the problem statement as a standalone engineering spec.
+
+### Actions
+1. Score the 7 Problem checklist items from `references/creating-challenges.md`.
+2. Extract explicit contracts (`must` / `should` statements) and split combined requirements.
+3. Flag missing/implied contracts, ambiguous semantics, over-prescriptive schema/structure details, irrelevant context, and scope mismatches.
+
+### Decision Rules
+- `Request Changes`: any fixable problem-quality issue.
+- `Continue`: problem statement is clear, self-contained, deterministic, and appropriately scoped.
+
+### Required Notes
+- Word count
+- Explicit contracts
+- Problem issues found
+
+## Stage 5: Test Fairness Audit
+
+### Goal
+Ensure tests are complete, fair, behavioral, and actually aligned with the written problem.
+
+### Actions
+1. Score the 8 Tests checklist items from `references/creating-challenges.md`.
+2. Run subpass `5A: Spec -> Test coverage`.
+   - Build an explicit `Spec Requirement -> Covered by Test(s) -> Status` table.
+   - Flag untested requirements.
+3. Run subpass `5B: Test -> Spec fairness`.
+   - Build an explicit `Test Assertion -> Traces to Spec Requirement -> Status` table.
+   - Ask: could a partial or wrong implementation still pass?
+4. Flag:
+   - hidden requirements
+   - stronger-than-spec expectations
+   - representation-choice assertions (shape, ordering, normalization, canonicalization, inlining, flattening, exact counts)
+   - multiple-valid-interpretation traps
+   - undocumented or hard-to-discover API/configuration requirements
+   - internal leakage assertions
+5. Apply a conservative public-surface/discoverability audit:
+   - only flag if the evidence suggests the requirement is genuinely hard to infer from the problem and repo surface
+   - distinguish documented public API from merely available implementation details
+
+### Decision Rules
+- `Request Changes`: any fixable fairness, determinism, alignment, or hidden-requirement issue.
+- `Continue`: tests are fair and solver-discoverable.
+
+### Required Notes
+- Test fairness findings
+- Spec -> test coverage table
+- Test -> spec fairness table
+- Alignment risks
+- Hidden/discoverability issues
+
+## Stage 6: Docker Verification
+
+### Goal
+Confirm the submission behaves correctly in the required offline environment.
+
+### Actions
+1. Use the commands in `references/docker-commands.md`.
+2. Verify:
+   - base tests pass on base commit
+   - new tests fail before solution
+   - base tests pass with solution
+   - new tests pass with solution
+3. If `git apply --check` fails only due to CRLF line endings in patch files, normalize patch files to LF and retry. Treat this as environment normalization, not a submission issue.
+
+### Decision Rules
+- `Request Changes`: Docker build/test verification fails for a fixable reason.
+- `Continue`: all expected verification states are correct.
+
+### Required Notes
+- Build result
+- Pre-solution test results
+- Post-solution test results
+- Whether CRLF normalization was needed
+
+## Stage 7: Solution Audit
+
+### Goal
+Confirm the solution is legitimate and satisfies the reviewer-side implementation constraints.
+
+### Actions
+1. Score the 6 Solution & Code checklist items from `references/creating-challenges.md`.
+2. Verify:
+   - non-empty meaningful hand-authored added lines >= 380
+   - meaningful file changes >= 3
+   - no generated-file inflation
+   - no padding / dead code / irrelevant changes
+   - no suspicious API breakage unless required
+
+### Decision Rules
+- `Request Changes`: fixable solution-quality issues, insufficient meaningful LOC/file count, padding, or regressions.
+- `Continue`: solution is legitimate and meets reviewer thresholds.
+
+### Required Notes
+- Meaningful LOC
+- Meaningful file count
+- Generated LOC excluded
+- Solution issues found
+
+## Stage 8: Decision Synthesis
+
+### Goal
+Produce the final verdict only after every prior stage has run.
+
+### Actions
+1. Assign the overall quality score using `references/reviewer-rubric-2026.md`.
+2. Classify issues:
+   - non-fixable issues -> `Reject`
+   - fixable issues -> `Request Changes`
+   - no issues and quality score >= 5 -> `Approve`
+3. Write `feedback.md` in the repo root using `references/feedback-template.md`.
+4. Include:
+   - author-facing feedback
+   - `Ambiguity Flags`
+   - `Prescriptiveness Flags`
+   - `Spec-Test Alignment`
+   - `Changes Required`
+   - checklist selections
+   - quality score
+   - reasoning
+   - concrete fixes for any issue that can be fixed
+
+### Decision Rules
+- `Approve`: no fixable issues and quality score >= 5.
+- `Request Changes`: any fixable issue remains.
+- `Reject`: any non-fixable issue remains.
+
+### Required Notes
+- Final decision
+- Quality score
+- Fix suggestions
 
 ## Similarity Prompt
 
-Use this prompt when multiple problem descriptions are provided or a "Similar Problems" section is present. If any similarity is detected, stop and reject.
+Use this prompt when multiple problem descriptions are provided or a `Similar Problems` section is present.
 
-```
+```text
 Analyze the overlap between the following problem statements and report quantitative similarity findings across three dimensions:
 
 Behavioural Match Percentage
-
 Implementation-Specific Match Percentage
-
 Requirement-Specific Match Percentage
 
 For each dimension:
-Clearly list shared vs divergent aspects.
-
-Use concrete counts (for example 5/7, 4/8) to justify percentages.
-
-Call out unique or scope-expanding requirements separately.
-
-Provide a short interpretation explaining what the percentage implies (same problem, partial overlap, or different scope).
+- Clearly list shared vs divergent aspects.
+- Use concrete counts (for example 5/7, 4/8) to justify percentages.
+- Call out unique or scope-expanding requirements separately.
+- Provide a short interpretation explaining what the percentage implies (same problem, partial overlap, or different scope).
 
 P1:
 [Paste P1]
@@ -70,31 +256,10 @@ P3:
 [Paste P3]
 ```
 
-## Hard Requirements
-
-See references/creating-challenges.md for all hard requirements and checklist items. If any hard requirement fails, reject.
-
-## Docker Verification
-
-Use the exact commands in references/docker-commands.md. Do not prompt the user.
-
-## Scoring and Decision
-
-- Overall quality score is 1-7 using references/reviewer-rubric-2026.md.
-- Approve: no fixable issues and quality score >= 5.
-- Request Changes: fixable issues (test determinism, alignment, missing patches, Docker failures, weak specs, etc).
-- Reject: non-fixable issues only (duplicate/similar problem, wrong license, invalid repo, or existing PR that already fixes the problem).
-
-## Output
-
-- Use references/feedback-template.md exact format.
-- Mark selected decision and checklist options explicitly.
-- ASCII only.
-
 ## References
 
-- references/creating-challenges.md - Hard requirements and checklists (7/8/6)
-- references/reviewer-rubric-2026.md - Quality score rubric (1-7)
-- references/feedback-template.md - Exact output structure
-- references/allowed-licenses.md - Permissive license list
-- references/docker-commands.md - Exact verification commands
+- `references/creating-challenges.md` - Hard requirements and checklists (7/8/6)
+- `references/reviewer-rubric-2026.md` - Quality score rubric (1-7)
+- `references/feedback-template.md` - Exact output structure
+- `references/allowed-licenses.md` - Permissive license list
+- `references/docker-commands.md` - Exact verification commands
