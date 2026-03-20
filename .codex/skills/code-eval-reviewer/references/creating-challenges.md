@@ -52,6 +52,7 @@ Use this file as the source of truth for hard requirements and checklist items.
 - Reviewer LOC requirement: solution.patch must add >= 380 non-empty meaningful hand-authored lines (enforced during review; request changes if below 380)
 - Reviewer file-count requirement: solution.patch must change >= 3 meaningful hand-authored files (enforced during review; request changes if below 3)
 - Exclude generated files, generated parser outputs, vendored artifacts, lockfiles, and similar non-meaningful boilerplate from reviewer LOC counting
+- Exclude non-logic lines from reviewer LOC counting: package lines, import block lines, blank lines, comment-only lines, and braces-only / formatting-only lines that do not carry logic by themselves
 - Reject if solution appears padded with dead code or unnecessary lengthening
 
 ## Solution & Code Checklist (6)
