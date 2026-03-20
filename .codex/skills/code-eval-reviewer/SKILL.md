@@ -183,6 +183,7 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
    - non-empty meaningful hand-authored added lines >= 380
    - meaningful file changes >= 3
    - no generated-file inflation
+   - exclude non-logic lines from meaningful LOC counting: package lines, import block lines, blank lines, comment-only lines, and braces-only / formatting-only lines that do not carry logic by themselves
    - no padding / dead code / irrelevant changes
    - no suspicious API breakage unless required
 

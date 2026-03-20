@@ -932,17 +932,31 @@ def is_generated_file_path(path: str) -> bool:
     return False
 
 
-def is_meaningful_added_line(content: str) -> bool:
+def is_meaningful_added_line(content: str, in_import_block: bool = False) -> Tuple[bool, bool]:
     stripped = content.strip()
     if not stripped:
-        return False
+        return False, False
     if is_comment_line(content):
-        return False
+        return False, False
+    if re.fullmatch(r"package\s+[\w./-]+", stripped):
+        return False, False
+    if re.fullmatch(r"(import|using|use|namespace)\b.*", stripped):
+        if re.fullmatch(r"(import|using)\s*[\(\{]?", stripped):
+            return False, True
+        return False, False
+    if re.fullmatch(r"from\s+[\w.]+\s+import\b.*", stripped):
+        return False, False
+    if in_import_block:
+        if stripped in {")", "}"}:
+            return False, False
+        if re.fullmatch(r'["\'\w\./\-\*,\s]+', stripped):
+            return False, True
+        return False, False
     if re.fullmatch(r"[{}\[\]();,]+", stripped):
-        return False
+        return False, False
     if re.fullmatch(r"(break|continue|pass|return None|return nil)", stripped):
-        return False
-    return True
+        return False, False
+    return True, False
 
 
 def diff_stats(diff_text: str) -> Dict:
@@ -956,12 +970,14 @@ def diff_stats(diff_text: str) -> Dict:
     generated_files = set()
     generated_added = 0
     meaningful_files = set()
+    in_import_block = False
     for line in diff_text.splitlines():
         if line.startswith("+++ ") or line.startswith("--- ") or line.startswith("@@"):
             if line.startswith("+++ b/"):
                 current_file = line[len("+++ b/"):].strip()
                 if is_generated_file_path(current_file):
                     generated_files.add(current_file)
+                in_import_block = False
             continue
         if line.startswith("+") and not line.startswith("+++ "):
             content = line[1:]
@@ -974,7 +990,8 @@ def diff_stats(diff_text: str) -> Dict:
                 comment += 1
             else:
                 code += 1
-            if current_file not in generated_files and is_meaningful_added_line(content):
+            meaningful_line, in_import_block = is_meaningful_added_line(content, in_import_block)
+            if current_file not in generated_files and meaningful_line:
                 meaningful += 1
                 if current_file:
                     meaningful_files.add(current_file)
@@ -1485,7 +1502,7 @@ def fix_suggestions(issues: List[str]) -> List[str]:
         elif "missing required patch files" in issue.lower():
             suggestions.append("Provide solution.patch and ensure test.patch is available either directly or embedded in setup.sh.")
         elif "added meaningful loc below required minimum" in issue.lower():
-            suggestions.append("Expand the hand-authored implementation to >= 380 meaningful LOC; generated outputs and boilerplate do not count.")
+            suggestions.append("Expand the hand-authored implementation to >= 380 meaningful LOC; generated outputs and non-logic lines like package/import/comments/blank or braces-only lines do not count.")
         elif "changed meaningful files below required minimum" in issue.lower():
             suggestions.append("Spread the hand-authored implementation across at least 3 meaningful files; generated or irrelevant files do not count.")
         elif "patch" in issue.lower() and "apply" in issue.lower():
