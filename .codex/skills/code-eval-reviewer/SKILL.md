@@ -183,7 +183,7 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
    - non-empty meaningful hand-authored added lines >= 380
    - meaningful file changes >= 3
    - no generated-file inflation
-   - exclude non-logic lines from meaningful LOC counting: package lines, import block lines, blank lines, comment-only lines, and braces-only / formatting-only lines that do not carry logic by themselves
+   - blank lines and comment-only lines are always excluded; package lines, import block lines, and braces-only / formatting-only lines may still be counted, but report a conservative LOC figure separately and flag the patch if those structural lines are excessive
    - no padding / dead code / irrelevant changes
    - no suspicious API breakage unless required
 
@@ -193,6 +193,8 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
 
 ### Required Notes
 - Meaningful LOC
+- Conservative LOC
+- Structural/non-logic lines counted in meaningful LOC
 - Meaningful file count
 - Generated LOC excluded
 - Solution issues found
