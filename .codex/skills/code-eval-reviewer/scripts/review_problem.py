@@ -446,6 +446,46 @@ def multiple_valid_interpretations_issues(desc_text: str, test_patch: str) -> Li
     return issues
 
 
+def workaround_solution_issues(contracts: List[str], test_patch: str) -> List[str]:
+    issues = []
+    if not contracts or not test_patch:
+        return issues
+
+    complexity_terms = {
+        "merge", "merged", "merging", "coalesce", "coalesced", "normalize", "normalized",
+        "stream", "streamed", "streaming", "chunk", "chunks", "fragment", "fragments",
+        "history", "state", "stateful", "incremental", "update", "updates", "accumulate",
+        "batched", "batch", "combine", "combined", "repeated", "sequence", "ordering",
+    }
+    scenario_markers = {
+        "initial", "first", "later", "subsequent", "multiple", "repeated", "chained",
+        "nested", "batched", "fragment", "fragments", "chunk", "chunks", "update", "updates",
+        "empty", "single", "all", "together", "already", "existing",
+    }
+
+    complex_contracts = []
+    for contract in contracts:
+        tokens = normalize_token_set(contract)
+        if len(tokens & complexity_terms) >= 1:
+            complex_contracts.append(contract)
+
+    if not complex_contracts:
+        return issues
+
+    test_tokens = normalize_token_set(test_patch)
+    marker_hits = len(test_tokens & scenario_markers)
+    test_blocks = extract_test_blocks(test_patch)
+    has_parametrized = bool(re.search(r"\b(parametrize|parameterized|subTest|for _,|for case in|cases\s*=)", test_patch, re.IGNORECASE))
+    case_count = max(1, len(test_blocks))
+
+    if marker_hits <= 2 and case_count <= 3 and not has_parametrized:
+        issues.append(
+            "Tests may leave loopholes for workaround solutions: complex/stateful behavior is specified, but scenario coverage looks too narrow to rule out partial implementations."
+        )
+
+    return issues
+
+
 def spec_test_alignment(contracts: List[str], test_cases: List[str], test_patch: str) -> List[str]:
     issues = []
     if not contracts or not test_cases:
@@ -869,6 +909,7 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     fairness_issues.extend(stronger_than_spec_issues(contracts, desc_text, test_patch))
     fairness_issues.extend(multiple_valid_interpretations_issues(desc_text, test_patch))
     fairness_issues.extend(undocumented_surface_issues(desc_text, test_patch, repo_dir))
+    fairness_issues.extend(workaround_solution_issues(contracts, test_patch))
     if fairness_issues:
         issues.extend(fairness_issues)
 
@@ -1544,6 +1585,8 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Strengthen assertions to verify exact expected outputs.")
         elif "partial or wrong implementation" in issue.lower():
             suggestions.append("Tighten assertions so incorrect or partial implementations cannot pass.")
+        elif "workaround solutions" in issue.lower() or "partially complete implementations" in issue.lower():
+            suggestions.append("Add scenario coverage for the complex behavior so workaround or partially complete implementations cannot pass.")
         elif "scope" in issue.lower():
             suggestions.append("Reduce scope to a realistic change that fits the repo's purpose.")
         elif "prescriptive" in issue.lower():

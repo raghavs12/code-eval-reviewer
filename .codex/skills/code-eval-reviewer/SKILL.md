@@ -126,11 +126,13 @@ Ensure tests are complete, fair, behavioral, and actually aligned with the writt
 3. Run subpass `5B: Test -> Spec fairness`.
    - Build an explicit `Test Assertion -> Traces to Spec Requirement -> Status` table.
    - Ask: could a partial or wrong implementation still pass?
+   - For complex/stateful/merge-like behavior, ask whether the tests cover enough scenarios to rule out workaround or partially complete implementations.
 4. Flag:
    - hidden requirements
    - stronger-than-spec expectations
    - representation-choice assertions (shape, ordering, normalization, canonicalization, inlining, flattening, exact counts)
    - multiple-valid-interpretation traps
+   - loopholes that would allow workaround or partially complete implementations to pass
    - undocumented or hard-to-discover API/configuration requirements
    - internal leakage assertions
 5. Apply a conservative public-surface/discoverability audit:
@@ -146,6 +148,7 @@ Ensure tests are complete, fair, behavioral, and actually aligned with the writt
 - Spec -> test coverage table
 - Test -> spec fairness table
 - Alignment risks
+- Workaround-solution risks
 - Hidden/discoverability issues
 
 ## Stage 6: Docker Verification
