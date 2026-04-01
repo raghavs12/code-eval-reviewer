@@ -41,10 +41,14 @@ Confirm the review directory is reviewable and extract the base context.
 
 ### Actions
 1. Find and parse `setup.sh`, `Problem-Description.txt`, and `solution.patch`.
-2. If `test.patch` or `Dockerfile` are not present as separate files, extract them from `setup.sh`.
-3. Treat `test.sh` as satisfied when it is created by `test.patch`.
-4. Extract repository URL and commit hash.
-5. Record any missing files.
+2. Inspect `solutiondiff1.patch`, `solutiondiff2.patch`, and `solutiondiff3.patch`.
+   - All three files are expected to be present.
+   - Minimum one and maximum three will contain content.
+   - Treat empty files as no-content placeholders.
+3. If `test.patch` or `Dockerfile` are not present as separate files, extract them from `setup.sh`.
+4. Treat `test.sh` as satisfied when it is created by `test.patch`.
+5. Extract repository URL and commit hash.
+6. Record any missing files.
 
 ### Decision Rules
 - `Reject`: not used in this stage by itself.
@@ -55,6 +59,7 @@ Confirm the review directory is reviewable and extract the base context.
 - Repository URL
 - Commit hash
 - Presence/absence of required files, including whether `Dockerfile` and `test.patch` were extracted from `setup.sh` and whether `test.sh` is created by `test.patch`
+- Number of passed agent solution diff files present and how many are non-empty
 
 ## Stage 2: Similarity Gate
 
@@ -185,6 +190,10 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
 2. Verify:
    - non-empty meaningful hand-authored added lines >= 380
    - meaningful file changes >= 3
+   - all three `solutiondiff1.patch` to `solutiondiff3.patch` files must be checked
+   - at least one of the three must be non-empty
+   - each non-empty passed agent solution diff must also have conservative LOC >= 380
+   - for each non-empty passed agent solution diff, report both meaningful LOC and conservative LOC in `feedback.md`
    - no generated-file inflation
    - blank lines and comment-only lines are always excluded; package lines, import block lines, and braces-only / formatting-only lines may still be counted, but report a conservative LOC figure separately and flag the patch if those structural lines are excessive
    - no padding / dead code / irrelevant changes
@@ -200,6 +209,7 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
 - Structural/non-logic lines counted in meaningful LOC
 - Meaningful file count
 - Generated LOC excluded
+- Passed agent solution diff LOC summaries when provided
 - Solution issues found
 
 ## Stage 8: Decision Synthesis
@@ -218,6 +228,7 @@ Produce the final verdict only after every prior stage has run.
    - author-facing feedback
    - `Ambiguity Flags`
    - `Prescriptiveness Flags`
+   - `Passed Agent Solution Diffs`
    - `Spec-Test Alignment`
    - `Changes Required`
    - checklist selections

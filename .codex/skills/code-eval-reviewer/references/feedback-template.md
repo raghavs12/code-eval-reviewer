@@ -25,6 +25,9 @@ Optional
 Prescriptiveness Flags
 Optional
 
+Passed Agent Solution Diffs
+Optional
+
 Spec-Test Alignment
 Optional
 

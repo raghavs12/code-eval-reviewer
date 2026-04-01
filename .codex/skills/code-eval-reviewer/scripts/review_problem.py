@@ -1152,6 +1152,36 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
     return {"checks": checks, "issues": issues, "stats": stats}
 
 
+def analyze_agent_solution_diffs(diff_files: List[Path]) -> Dict:
+    reports = []
+    issues = []
+    nonempty_count = 0
+    for path in diff_files[:3]:
+        if not path.exists():
+            issues.append(f"Passed agent solution diff file missing: {path.name}")
+            continue
+        diff_text = read_text(path)
+        if not diff_text.strip():
+            continue
+        nonempty_count += 1
+        stats = diff_stats(diff_text)
+        report = {
+            "name": path.name,
+            "meaningful": stats.get("meaningful", 0),
+            "conservative": stats.get("conservative_meaningful", 0),
+            "added": stats.get("added", 0),
+            "structural_non_logic": stats.get("structural_non_logic", 0),
+        }
+        reports.append(report)
+        if report["conservative"] < 380:
+            issues.append(
+                f"Passed agent solution diff {path.name} is below required conservative LOC minimum ({report['conservative']}; meaningful {report['meaningful']})"
+            )
+    if nonempty_count == 0:
+        issues.append("No non-empty passed agent solution diffs provided")
+    return {"reports": reports, "issues": issues, "nonempty_count": nonempty_count}
+
+
 def normalize_patch_line_endings(patch_path: Path) -> None:
     content = read_text(patch_path)
     if "\r\n" in content:
@@ -1472,6 +1502,30 @@ def format_feedback_incorporation_section(rereview: Optional[Dict]) -> List[str]
     return lines
 
 
+def format_agent_solution_diff_section(agent_diff_analysis: Dict) -> List[str]:
+    lines = ["Passed Agent Solution Diffs", "Optional"]
+    reports = agent_diff_analysis.get("reports", []) if agent_diff_analysis else []
+    if not reports:
+        lines.append("No non-empty passed agent solution diffs provided.")
+        return lines
+    lines.extend(
+        format_table(
+            ["Diff", "Meaningful LOC", "Conservative LOC", "Raw Added LOC", "Structural/Non-logic"],
+            [
+                [
+                    report["name"],
+                    str(report["meaningful"]),
+                    str(report["conservative"]),
+                    str(report["added"]),
+                    str(report["structural_non_logic"]),
+                ]
+                for report in reports
+            ],
+        )
+    )
+    return lines
+
+
 def init_stage_results() -> Dict[str, Dict[str, str]]:
     return {
         "stage_0_rereview": {"name": "Feedback Incorporation Check", "status": "not_applicable", "notes": ""},
@@ -1565,6 +1619,12 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Provide solution.patch and ensure test.patch is available either directly or embedded in setup.sh.")
         elif "added meaningful loc below required minimum" in issue.lower():
             suggestions.append("Expand the hand-authored implementation to >= 380 meaningful LOC.")
+        elif "passed agent solution diff" in issue.lower() and "below required conservative loc minimum" in issue.lower():
+            suggestions.append("Provide passed agent solution diffs whose conservative LOC is >= 380, or revise the challenge so solved agent diffs meet the bar.")
+        elif "no non-empty passed agent solution diffs provided" in issue.lower():
+            suggestions.append("Ensure at least one of solutiondiff1.patch, solutiondiff2.patch, or solutiondiff3.patch contains a passed agent solution diff.")
+        elif "passed agent solution diff file missing" in issue.lower():
+            suggestions.append("Provide all three passed agent solution diff files; files may be empty, but at least one must contain content.")
         elif "too many structural/non-logic lines" in issue.lower():
             suggestions.append("Reduce reliance on package/import/brace-heavy structural lines and add more actual logic; include the conservative LOC in the submission notes.")
         elif "changed meaningful files below required minimum" in issue.lower():
@@ -1598,7 +1658,7 @@ def fix_suggestions(issues: List[str]) -> List[str]:
     return list(dict.fromkeys(suggestions))
 
 
-def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analysis: Dict, docker_results: Dict, word_count: int, stats: Optional[Dict], decision: str, fixable_issues: List[str], stage_results: Dict[str, Dict[str, str]], rereview: Optional[Dict]) -> str:
+def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analysis: Dict, docker_results: Dict, word_count: int, stats: Optional[Dict], decision: str, fixable_issues: List[str], stage_results: Dict[str, Dict[str, str]], rereview: Optional[Dict], agent_diff_analysis: Optional[Dict]) -> str:
     lines = []
     lines.extend(stage_lines(stage_results))
     lines.append("")
@@ -1637,6 +1697,11 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
         lines.append(f"- Docker new pass (with solution): {docker_results.get('solution_new_pass', False)}")
     if rereview:
         lines.append(f"- Re-review summary: {rereview.get('summary', 'n/a')}")
+    if agent_diff_analysis and agent_diff_analysis.get("reports"):
+        for report in agent_diff_analysis["reports"]:
+            lines.append(
+                f"- {report['name']}: meaningful={report['meaningful']}, conservative={report['conservative']}, raw_added={report['added']}"
+            )
     if decision == "Request Changes":
         lines.append("")
         lines.append("Fixes:")
@@ -1669,6 +1734,11 @@ def main():
     desc_files = find_files(problem_dir, ["Problem-Description.txt", "description.md", "problem.md"])
     test_patch_file = find_file(problem_dir, ["test.patch"])
     solution_patch_file = find_file(problem_dir, ["solution.patch"])
+    agent_solution_diff_files = [
+        problem_dir / "solutiondiff1.patch",
+        problem_dir / "solutiondiff2.patch",
+        problem_dir / "solutiondiff3.patch",
+    ]
     prior_feedback_file = find_file(problem_dir, ["feedback.md"])
     extracted_files = materialize_embedded_setup_files(problem_dir, setup_file)
     test_patch_file = test_patch_file or extracted_files.get("test.patch")
@@ -1695,6 +1765,8 @@ def main():
     input_notes.append(f"commit={commit_hash or 'missing'}")
     input_notes.append(f"test_patch={'yes' if test_patch_file else 'no'}")
     input_notes.append(f"solution_patch={'yes' if solution_patch_file else 'no'}")
+    present_agent_diff_files = sum(1 for p in agent_solution_diff_files if p.exists())
+    input_notes.append(f"passed_agent_solution_diff_files_present={present_agent_diff_files}/3")
     dockerfile_path = find_file(problem_dir, ['Dockerfile', 'dockerfile']) or extracted_files.get('Dockerfile')
     input_notes.append(f"dockerfile={'yes' if dockerfile_path else 'no'}")
     input_notes.append(f"test_sh_from_patch={'yes' if test_sh_from_patch else 'no'}")
@@ -1887,10 +1959,12 @@ def main():
     analysis_repo_dir = Path(docker_results["analysis_repo_dir"]) if docker_results.get("analysis_repo_dir") else None
     test_analysis = analyze_tests(test_patch_text, main_desc, analysis_repo_dir, docker_results)
     solution_analysis = analyze_solution(solution_patch_text, docker_results)
+    agent_diff_analysis = analyze_agent_solution_diffs(agent_solution_diff_files)
     current_predecision_issues = []
     current_predecision_issues.extend(problem_analysis["issues"])
     current_predecision_issues.extend(test_analysis["issues"])
     current_predecision_issues.extend(solution_analysis["issues"])
+    current_predecision_issues.extend(agent_diff_analysis["issues"])
     if prior_feedback_text:
         rereview = analyze_rereview(prior_feedback_text, current_predecision_issues)
         rereview_notes = [rereview["summary"]]
@@ -1924,6 +1998,8 @@ def main():
     if solution_stats:
         solution_notes.append(f"meaningful_loc={solution_stats.get('meaningful', 0)}")
         solution_notes.append(f"meaningful_files={solution_stats.get('meaningful_file_count', 0)}")
+    if agent_diff_analysis["reports"]:
+        solution_notes.append(f"passed_agent_solution_diffs_nonempty={agent_diff_analysis['nonempty_count']}")
     set_stage(stage_results, "stage_7_solution", "completed", "; ".join(solution_notes))
 
     problem_checks = problem_analysis["checks"]
@@ -1951,6 +2027,7 @@ def main():
         fixable_issues.append("Prior requested changes were not fully addressed")
     if rereview and rereview.get("new_issues"):
         fixable_issues.append("New issues were introduced in the updated submission")
+    fixable_issues.extend(agent_diff_analysis["issues"])
 
     if reject_reasons:
         decision = "Reject"
@@ -1970,6 +2047,7 @@ def main():
     issues.extend(problem_analysis["issues"])
     issues.extend(test_analysis["issues"])
     issues.extend(solution_analysis["issues"])
+    issues.extend(agent_diff_analysis["issues"])
     issues.extend(fixable_issues)
     if not issues:
         issues.append("No major issues found")
@@ -1988,6 +2066,7 @@ def main():
         fixable_issues,
         stage_results,
         rereview,
+        agent_diff_analysis,
     )
 
     problem_block, problem_yes = format_checklist(problem_checks)
@@ -2026,6 +2105,8 @@ def main():
         *format_bullets(problem_analysis.get("prescriptiveness_flags", [])),
         "",
     ])
+    output_lines.extend(format_agent_solution_diff_section(agent_diff_analysis))
+    output_lines.append("")
     output_lines.extend(format_alignment_section(test_analysis))
     output_lines.append("")
     changes_required = fix_suggestions(fixable_issues or issues)
