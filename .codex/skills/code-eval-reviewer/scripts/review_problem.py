@@ -1620,7 +1620,20 @@ def fix_suggestions(issues: List[str]) -> List[str]:
         elif "added meaningful loc below required minimum" in issue.lower():
             suggestions.append("Expand the hand-authored implementation to >= 380 meaningful LOC.")
         elif "passed agent solution diff" in issue.lower() and "below required conservative loc minimum" in issue.lower():
-            suggestions.append("Provide passed agent solution diffs whose conservative LOC is >= 380, or revise the challenge so solved agent diffs meet the bar.")
+            match = re.search(
+                r"Passed agent solution diff\s+(\S+)\s+is below required conservative LOC minimum \((\d+);\s+meaningful\s+(\d+)\)",
+                issue,
+                re.IGNORECASE,
+            )
+            if match:
+                diff_name = match.group(1)
+                conservative_loc = match.group(2)
+                meaningful_loc = match.group(3)
+                suggestions.append(
+                    f"{diff_name} has conservative LOC {conservative_loc} and meaningful LOC {meaningful_loc}, which is below the required conservative LOC threshold of 380. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass."
+                )
+            else:
+                suggestions.append("A passed agent solution diff is below the required conservative LOC threshold of 380. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass.")
         elif "no non-empty passed agent solution diffs provided" in issue.lower():
             suggestions.append("Ensure at least one of solutiondiff1.patch, solutiondiff2.patch, or solutiondiff3.patch contains a passed agent solution diff.")
         elif "passed agent solution diff file missing" in issue.lower():
