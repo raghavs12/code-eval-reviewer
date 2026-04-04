@@ -197,6 +197,12 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
    - no generated-file inflation
    - blank lines and comment-only lines are always excluded; package lines, import block lines, and braces-only / formatting-only lines may still be counted, but report a conservative LOC figure separately and flag the patch if those structural lines are excessive
    - no padding / dead code / irrelevant changes
+   - conservatively audit over-engineering:
+     - ask whether the solution is much broader than the behavior described by the problem
+     - ask whether the repo already appears to provide simpler infrastructure that the solution is rebuilding
+     - ask whether large new helper/parser/printer/plumbing surfaces are clearly justified by the spec/tests
+     - ask whether newly added helpers/types appear weakly referenced or effectively dead
+     - only flag over-engineering when multiple signals align; do not fail the review on a single weak clue
    - no suspicious API breakage unless required
 
 ### Decision Rules
@@ -209,6 +215,7 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
 - Structural/non-logic lines counted in meaningful LOC
 - Meaningful file count
 - Generated LOC excluded
+- Over-engineering / reuse / low-reference signals when present
 - Passed agent solution diff LOC summaries when provided
 - Solution issues found
 

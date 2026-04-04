@@ -1076,7 +1076,168 @@ def diff_stats(diff_text: str) -> Dict:
     }
 
 
-def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
+def added_lines_by_file(diff_text: str) -> Dict[str, List[str]]:
+    files: Dict[str, List[str]] = {}
+    current_file = None
+    for line in diff_text.splitlines():
+        if line.startswith("+++ b/"):
+            current_file = line[len("+++ b/"):].strip()
+            files.setdefault(current_file, [])
+            continue
+        if line.startswith("diff --git "):
+            current_file = None
+            continue
+        if line.startswith("+") and not line.startswith("+++ ") and current_file:
+            files.setdefault(current_file, []).append(line[1:])
+    return files
+
+
+def extract_added_symbols(solution_patch: str) -> List[Dict[str, str]]:
+    symbols: List[Dict[str, str]] = []
+    current_file = None
+    role_pattern = re.compile(r"(printer|parser|formatter|builder|resolver|adapter|handler|action|config|manager|collector)", re.IGNORECASE)
+    symbol_patterns = [
+        (re.compile(r"^\+\s*def\s+([A-Za-z_]\w*)\s*\("), "function"),
+        (re.compile(r"^\+\s*class\s+([A-Za-z_]\w*)\b"), "type"),
+        (re.compile(r"^\+\s*func\s+(?:\([^)]+\)\s*)?([A-Za-z_]\w*)\s*\("), "function"),
+        (re.compile(r"^\+\s*type\s+([A-Za-z_]\w*)\s+(?:struct|interface)\b"), "type"),
+        (re.compile(r"^\+\s*function\s+([A-Za-z_]\w*)\s*\("), "function"),
+        (re.compile(r"^\+\s*(?:export\s+)?class\s+([A-Za-z_]\w*)\b"), "type"),
+        (re.compile(r"^\+\s*fn\s+([A-Za-z_]\w*)\s*\("), "function"),
+        (re.compile(r"^\+\s*(?:pub\s+)?struct\s+([A-Za-z_]\w*)\b"), "type"),
+    ]
+    for line in solution_patch.splitlines():
+        if line.startswith("+++ b/"):
+            current_file = line[len("+++ b/"):].strip()
+            continue
+        if not line.startswith("+") or line.startswith("+++ "):
+            continue
+        for pattern, kind in symbol_patterns:
+            match = pattern.search(line)
+            if match:
+                name = match.group(1)
+                role_match = role_pattern.search(name)
+                symbols.append(
+                    {
+                        "name": name,
+                        "kind": kind,
+                        "file": current_file or "",
+                        "role": role_match.group(1).lower() if role_match else "",
+                    }
+                )
+                break
+    return symbols
+
+
+def file_should_skip_repo_scan(path: Path) -> bool:
+    normalized = str(path).replace("\\", "/").lower()
+    if any(part in {"vendor", "node_modules", ".git", ".venv", "dist", "build"} for part in path.parts):
+        return True
+    if any(part == "tests" or part.startswith("test") for part in path.parts):
+        return True
+    return bool(re.search(r"\.(min\.js|lock|sum)$", normalized))
+
+
+def collect_repo_text(repo_dir: Optional[Path]) -> Tuple[str, Dict[str, List[str]]]:
+    if not repo_dir or not repo_dir.exists():
+        return "", {}
+    chunks: List[str] = []
+    role_index: Dict[str, List[str]] = {}
+    role_pattern = re.compile(r"(printer|parser|formatter|builder|resolver|adapter|handler|action|config|manager|collector)", re.IGNORECASE)
+    token_pattern = re.compile(r"\b(New[A-Z]\w+|[A-Z]\w*(?:Printer|Parser|Formatter|Builder|Resolver|Adapter|Handler|Manager|Collector)|Inspect[A-Z]\w+)\b")
+    for path in repo_dir.rglob("*"):
+        if not path.is_file() or file_should_skip_repo_scan(path):
+            continue
+        try:
+            text = read_text(path)
+        except Exception:
+            continue
+        chunks.append(text)
+        for match in role_pattern.finditer(path.name):
+            role_index.setdefault(match.group(1).lower(), []).append(str(path.relative_to(repo_dir)))
+        for match in token_pattern.finditer(text):
+            role_match = role_pattern.search(match.group(1))
+            if role_match:
+                role_index.setdefault(role_match.group(1).lower(), []).append(str(path.relative_to(repo_dir)))
+    return "\n".join(chunks), role_index
+
+
+def detect_solution_overengineering(problem_text: str, test_patch: str, solution_patch: str, repo_dir: Optional[Path]) -> Dict[str, object]:
+    signals: List[str] = []
+    notes: List[str] = []
+    symbols = extract_added_symbols(solution_patch)
+    added_files = added_lines_by_file(solution_patch)
+    repo_text, repo_roles = collect_repo_text(repo_dir)
+    problem_tokens = normalize_token_set(problem_text)
+    test_tokens = normalize_token_set(test_patch)
+
+    role_symbols = [symbol for symbol in symbols if symbol["role"]]
+    if len(symbols) >= 6 or len(role_symbols) >= 4:
+        uncovered = 0
+        for symbol in symbols:
+            symbol_tokens = normalize_token_set(symbol["name"])
+            if symbol_tokens and not (symbol_tokens & problem_tokens) and not (symbol_tokens & test_tokens):
+                uncovered += 1
+        if uncovered >= max(3, len(symbols) // 2):
+            signals.append("unexercised_complexity")
+            notes.append(f"Large helper surface added ({len(symbols)} symbols), with {uncovered} symbols not clearly justified by the spec/tests.")
+
+    overlapping_roles = []
+    for symbol in role_symbols:
+        existing_paths = repo_roles.get(symbol["role"], [])
+        if existing_paths:
+            overlapping_roles.append((symbol["name"], symbol["role"], existing_paths[:2]))
+    if len(overlapping_roles) >= 2:
+        signals.append("reuse_over_rebuild")
+        notes.append(
+            "Solution adds custom infrastructure in areas the repo already covers: "
+            + "; ".join(
+                f"{name} overlaps existing {role} surface in {', '.join(paths)}"
+                for name, role, paths in overlapping_roles[:3]
+            )
+            + "."
+        )
+
+    behavioral_problem = not re.search(
+        r"\b(create|implement class|rename|refactor|new type|new struct|new class|add method)\b",
+        problem_text,
+        re.IGNORECASE,
+    )
+    plumbing_files = 0
+    plumbing_lines = 0
+    for file_name, lines in added_files.items():
+        joined = "\n".join(lines)
+        if re.search(r"(parser|printer|formatter|builder|resolver|adapter|handler|action|config)", file_name, re.IGNORECASE) or re.search(
+            r"\b(parser|printer|formatter|builder|resolver|adapter|handler|action|config)\b",
+            joined,
+            re.IGNORECASE,
+        ):
+            plumbing_files += 1
+            plumbing_lines += sum(1 for line in lines if is_meaningful_added_line(line))
+    if behavioral_problem and plumbing_files >= 2 and plumbing_lines >= 80:
+        signals.append("narrow_problem_broad_solution")
+        notes.append(f"Problem statement is behavior-focused, but the solution adds broad parser/config/plumbing code across {plumbing_files} files ({plumbing_lines} meaningful lines).")
+
+    low_reference_symbols = []
+    repo_and_patch_text = f"{repo_text}\n{solution_patch}"
+    for symbol in symbols:
+        occurrences = len(re.findall(rf"\b{re.escape(symbol['name'])}\b", repo_and_patch_text))
+        if occurrences <= 1:
+            low_reference_symbols.append(symbol["name"])
+    if len(low_reference_symbols) >= 3:
+        signals.append("low_reference_surface")
+        notes.append("Several newly added symbols appear unused or only weakly referenced: " + ", ".join(low_reference_symbols[:5]) + ".")
+
+    assertion_count = len(re.findall(r"\b(assert|expect|require\.)\b", test_patch))
+    if (len(symbols) >= 5 or plumbing_lines >= 100) and assertion_count <= 20:
+        signals.append("solution_complexity_exceeds_test_surface")
+        notes.append("Tests cover the behavior at a high level, but the solution adds substantially more infrastructure than the exercised surface suggests.")
+
+    unique_signals = list(dict.fromkeys(signals))
+    return {"signals": unique_signals, "notes": notes, "should_flag": len(unique_signals) >= 2}
+
+
+def analyze_solution(solution_patch: str, docker_results: Dict, problem_text: str = "", test_patch: str = "", analysis_repo_dir: Optional[Path] = None) -> Dict:
     issues = []
     checks = []
 
@@ -1090,7 +1251,7 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
             ("No AI-generated slop, comments, or artifacts", False),
         ]
         issues.append("solution.patch missing")
-        return {"checks": checks, "issues": issues, "stats": {}}
+        return {"checks": checks, "issues": issues, "stats": {}, "overengineering": {"signals": [], "notes": [], "should_flag": False}}
 
     stats = diff_stats(solution_patch)
     added = stats["added"]
@@ -1141,6 +1302,11 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
     if ai_slop:
         issues.append("AI-generated slop or excessive commentary detected")
 
+    overengineering = detect_solution_overengineering(problem_text, test_patch, solution_patch, analysis_repo_dir)
+    if overengineering["should_flag"]:
+        issues.append("Solution appears over-engineered relative to the problem/tests and may be reinventing existing repo infrastructure")
+        issues.extend(overengineering.get("notes", [])[:2])
+
     checks = [
         ("Meets all requirements", meets_requirements),
         ("No regressions, follows repo patterns", no_regressions),
@@ -1149,7 +1315,7 @@ def analyze_solution(solution_patch: str, docker_results: Dict) -> Dict:
         ("Existing API contracts stay stable", api_stable),
         ("No AI-generated slop, comments, or artifacts", no_ai_slop),
     ]
-    return {"checks": checks, "issues": issues, "stats": stats}
+    return {"checks": checks, "issues": issues, "stats": stats, "overengineering": overengineering}
 
 
 def analyze_agent_solution_diffs(diff_files: List[Path]) -> Dict:
@@ -1588,6 +1754,12 @@ def summarize_tests(test_analysis: Dict) -> str:
 
 def summarize_solution(solution_analysis: Dict) -> str:
     issues = solution_analysis.get("issues", [])
+    overengineering = solution_analysis.get("overengineering", {})
+    if overengineering.get("should_flag"):
+        notes = overengineering.get("notes", [])
+        if notes:
+            return "Solution: Over-engineering risk detected. " + "; ".join(notes[:2]) + "."
+        return "Solution: Over-engineering risk detected relative to the problem/tests."
     if not issues:
         return "Solution: Implementation is consistent with repo patterns, avoids public API changes, and shows no padding or unrelated edits."
     if len(issues) <= 2:
@@ -1660,6 +1832,14 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Tighten assertions so incorrect or partial implementations cannot pass.")
         elif "workaround solutions" in issue.lower() or "partially complete implementations" in issue.lower():
             suggestions.append("Add scenario coverage for the complex behavior so workaround or partially complete implementations cannot pass.")
+        elif "over-engineered relative to the problem/tests" in issue.lower():
+            suggestions.append("Simplify the solution to the minimum behavior required by the spec/tests, and reuse existing repo infrastructure instead of introducing new parser/printer/plumbing layers.")
+        elif "repo already covers" in issue.lower():
+            suggestions.append("Reuse the existing helper or extension point the repo already provides instead of rebuilding parallel infrastructure.")
+        elif "not clearly justified by the spec/tests" in issue.lower():
+            suggestions.append("Remove helper surface and fallback logic that is not clearly required by the spec or exercised by the tests.")
+        elif "appear unused or only weakly referenced" in issue.lower():
+            suggestions.append("Delete newly added methods/types that are unused or only weakly referenced, unless a test or requirement clearly depends on them.")
         elif "scope" in issue.lower():
             suggestions.append("Reduce scope to a realistic change that fits the repo's purpose.")
         elif "prescriptive" in issue.lower():
@@ -1701,6 +1881,9 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
         lines.append(f"- Structural/non-logic lines counted in meaningful LOC: {stats.get('structural_non_logic', 0)}")
         if stats.get("generated_files"):
             lines.append(f"- Generated LOC excluded: {stats.get('generated_added', 0)}")
+    overengineering = solution_analysis.get("overengineering", {})
+    if overengineering.get("signals"):
+        lines.append(f"- Over-engineering signals: {', '.join(overengineering['signals'])}")
     if docker_results.get("skipped"):
         lines.append("- Docker verification skipped")
     else:
@@ -1971,7 +2154,7 @@ def main():
 
     analysis_repo_dir = Path(docker_results["analysis_repo_dir"]) if docker_results.get("analysis_repo_dir") else None
     test_analysis = analyze_tests(test_patch_text, main_desc, analysis_repo_dir, docker_results)
-    solution_analysis = analyze_solution(solution_patch_text, docker_results)
+    solution_analysis = analyze_solution(solution_patch_text, docker_results, main_desc, test_patch_text, analysis_repo_dir)
     agent_diff_analysis = analyze_agent_solution_diffs(agent_solution_diff_files)
     current_predecision_issues = []
     current_predecision_issues.extend(problem_analysis["issues"])
@@ -2011,6 +2194,9 @@ def main():
     if solution_stats:
         solution_notes.append(f"meaningful_loc={solution_stats.get('meaningful', 0)}")
         solution_notes.append(f"meaningful_files={solution_stats.get('meaningful_file_count', 0)}")
+    overengineering = solution_analysis.get("overengineering", {})
+    if overengineering.get("signals"):
+        solution_notes.append(f"overengineering_signals={len(overengineering['signals'])}")
     if agent_diff_analysis["reports"]:
         solution_notes.append(f"passed_agent_solution_diffs_nonempty={agent_diff_analysis['nonempty_count']}")
     set_stage(stage_results, "stage_7_solution", "completed", "; ".join(solution_notes))
