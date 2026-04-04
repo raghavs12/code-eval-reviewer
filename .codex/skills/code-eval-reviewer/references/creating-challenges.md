@@ -51,7 +51,7 @@ Use this file as the source of truth for hard requirements and checklist items.
 - Agent-run requirement: median of successful runs >= 3 files modified and >= 100 agent messages (validated externally)
 - Reviewer LOC requirement: solution.patch must add >= 380 non-empty meaningful hand-authored lines (enforced during review; request changes if below 380)
 - Reviewer file-count requirement: solution.patch must change >= 3 meaningful hand-authored files (enforced during review; request changes if below 3)
-- Exclude generated files, generated parser outputs, vendored artifacts, lockfiles, and similar non-meaningful boilerplate from reviewer LOC counting
+- Exclude generated files, generated parser outputs, vendored artifacts, lockfiles, test files, and similar non-meaningful boilerplate from reviewer LOC counting
 - Blank lines and comment-only lines are always excluded. Package lines, import block lines, and braces-only / formatting-only lines may still be counted toward meaningful LOC, but the reviewer should also report a conservative solution LOC figure and flag submissions that rely too heavily on those structural lines
 - Reject if solution appears padded with dead code or unnecessary lengthening
 

@@ -189,12 +189,16 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
 1. Score the 6 Solution & Code checklist items from `references/creating-challenges.md`.
 2. Verify:
    - non-empty meaningful hand-authored added lines >= 380
+   - exclude test-file changes from meaningful and conservative LOC counts
    - meaningful file changes >= 3
    - all three `solutiondiff1.patch` to `solutiondiff3.patch` files must be checked
    - at least one of the three must be non-empty
-   - each non-empty passed agent solution diff must also have conservative LOC >= 380
+   - compute the median across the non-empty passed agent solution diffs
+   - the median meaningful LOC must be > 380
+   - the median conservative LOC must be > 380
    - for each non-empty passed agent solution diff, report both meaningful LOC and conservative LOC in `feedback.md`
    - no generated-file inflation
+   - exclude test files from meaningful and conservative LOC counting when they appear in `solution.patch`
    - blank lines and comment-only lines are always excluded; package lines, import block lines, and braces-only / formatting-only lines may still be counted, but report a conservative LOC figure separately and flag the patch if those structural lines are excessive
    - no padding / dead code / irrelevant changes
    - conservatively audit over-engineering:
@@ -202,6 +206,9 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
      - ask whether the repo already appears to provide simpler infrastructure that the solution is rebuilding
      - ask whether large new helper/parser/printer/plumbing surfaces are clearly justified by the spec/tests
      - ask whether newly added helpers/types appear weakly referenced or effectively dead
+     - ask whether the solution adds extra API/JSON fields not required by the spec/tests
+     - ask whether the solution introduces registry/manager abstraction layers where the repo already uses a simpler collection pattern
+     - ask whether the solution adds trivial wrapper helpers that only forward or stringify existing behavior
      - only flag over-engineering when multiple signals align; do not fail the review on a single weak clue
    - no suspicious API breakage unless required
 
@@ -215,6 +222,9 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
 - Structural/non-logic lines counted in meaningful LOC
 - Meaningful file count
 - Generated LOC excluded
+- Test-file LOC excluded from meaningful/conservative counts
+- Passed agent solution diff median meaningful LOC
+- Passed agent solution diff median conservative LOC
 - Over-engineering / reuse / low-reference signals when present
 - Passed agent solution diff LOC summaries when provided
 - Solution issues found

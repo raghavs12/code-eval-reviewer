@@ -973,6 +973,16 @@ def is_generated_file_path(path: str) -> bool:
     return False
 
 
+def is_test_file_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    base = os.path.basename(normalized)
+    if "/test/" in normalized or "/tests/" in normalized or "/__tests__/" in normalized or "/spec/" in normalized:
+        return True
+    if base.startswith("test_") or base.endswith("_test.go") or base.endswith(".test.js") or base.endswith(".spec.js") or base.endswith(".test.ts") or base.endswith(".spec.ts") or base.endswith(".test.tsx") or base.endswith(".spec.tsx") or base.endswith("_spec.rb"):
+        return True
+    return False
+
+
 def is_meaningful_added_line(content: str) -> bool:
     stripped = content.strip()
     if not stripped:
@@ -1017,6 +1027,7 @@ def diff_stats(diff_text: str) -> Dict:
     seen = {}
     current_file = None
     generated_files = set()
+    test_files = set()
     generated_added = 0
     meaningful_files = set()
     in_import_block = False
@@ -1027,6 +1038,8 @@ def diff_stats(diff_text: str) -> Dict:
                 current_file = line[len("+++ b/"):].strip()
                 if is_generated_file_path(current_file):
                     generated_files.add(current_file)
+                if is_test_file_path(current_file):
+                    test_files.add(current_file)
                 in_import_block = False
             continue
         if line.startswith("+") and not line.startswith("+++ "):
@@ -1042,13 +1055,13 @@ def diff_stats(diff_text: str) -> Dict:
                 code += 1
             meaningful_line = is_meaningful_added_line(content)
             conservative_line, in_import_block = is_conservative_meaningful_added_line(content, in_import_block)
-            if current_file not in generated_files and meaningful_line:
+            if current_file not in generated_files and current_file not in test_files and meaningful_line:
                 meaningful += 1
                 if current_file:
                     meaningful_files.add(current_file)
-            if current_file not in generated_files and conservative_line:
+            if current_file not in generated_files and current_file not in test_files and conservative_line:
                 conservative_meaningful += 1
-            elif current_file not in generated_files and meaningful_line:
+            elif current_file not in generated_files and current_file not in test_files and meaningful_line:
                 structural_non_logic += 1
             norm = re.sub(r"\s+", " ", content.strip())
             seen[norm] = seen.get(norm, 0) + 1
@@ -1070,6 +1083,7 @@ def diff_stats(diff_text: str) -> Dict:
         "suspicious": suspicious,
         "generated_added": generated_added,
         "generated_files": sorted(generated_files),
+        "test_files": sorted(test_files),
         "meaningful_files": sorted(meaningful_files),
         "meaningful_file_count": len(meaningful_files),
         "structural_non_logic": structural_non_logic,
@@ -1162,6 +1176,53 @@ def collect_repo_text(repo_dir: Optional[Path]) -> Tuple[str, Dict[str, List[str
     return "\n".join(chunks), role_index
 
 
+def extract_added_json_fields(solution_patch: str) -> List[str]:
+    fields: List[str] = []
+    for line in solution_patch.splitlines():
+        if not line.startswith("+") or line.startswith("+++ "):
+            continue
+        match = re.search(r'`json:"([^",]+)', line)
+        if match:
+            fields.append(match.group(1))
+    return fields
+
+
+def trivial_wrapper_symbols(solution_patch: str) -> List[str]:
+    wrappers: List[str] = []
+    lines = solution_patch.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.startswith("+") or line.startswith("+++ "):
+            i += 1
+            continue
+        match = re.search(r"^\+\s*(?:func\s+(?:\([^)]+\)\s*)?|def\s+)([A-Za-z_]\w*)", line)
+        if not match:
+            i += 1
+            continue
+        name = match.group(1)
+        body: List[str] = []
+        i += 1
+        while i < len(lines):
+            body_line = lines[i]
+            if body_line.startswith("+") and not body_line.startswith("+++ "):
+                stripped = body_line[1:].strip()
+                if stripped:
+                    body.append(stripped)
+                i += 1
+                continue
+            if body_line.startswith("@@") or body_line.startswith("diff --git ") or body_line.startswith("+++ b/"):
+                break
+            i += 1
+        condensed = [b for b in body if b not in {"{", "}", ")", "}()", "} else {"}]
+        if 0 < len(condensed) <= 3:
+            joined = " ".join(condensed)
+            if re.fullmatch(r"return\s+err\.Error\(\)", joined) or re.fullmatch(r"return\s+\w+\.\w+\(.*\)", joined) or re.fullmatch(r"_\s*=\s*\w+\.\w+\(.*\)\s+return\s+\w+", joined):
+                wrappers.append(name)
+        continue
+    return wrappers
+
+
 def detect_solution_overengineering(problem_text: str, test_patch: str, solution_patch: str, repo_dir: Optional[Path]) -> Dict[str, object]:
     signals: List[str] = []
     notes: List[str] = []
@@ -1232,6 +1293,32 @@ def detect_solution_overengineering(problem_text: str, test_patch: str, solution
     if (len(symbols) >= 5 or plumbing_lines >= 100) and assertion_count <= 20:
         signals.append("solution_complexity_exceeds_test_surface")
         notes.append("Tests cover the behavior at a high level, but the solution adds substantially more infrastructure than the exercised surface suggests.")
+
+    added_json_fields = extract_added_json_fields(solution_patch)
+    extra_json_fields = []
+    for field in added_json_fields:
+        field_tokens = normalize_token_set(field.replace("_", " "))
+        if field_tokens and not (field_tokens & problem_tokens) and not (field_tokens & test_tokens):
+            extra_json_fields.append(field)
+    if len(extra_json_fields) >= 2:
+        signals.append("extra_unrequired_output_surface")
+        notes.append("Solution adds JSON/API fields not clearly required by the spec/tests: " + ", ".join(sorted(set(extra_json_fields))[:6]) + ".")
+
+    wrappers = trivial_wrapper_symbols(solution_patch)
+    if len(wrappers) >= 2:
+        signals.append("trivial_wrapper_surface")
+        notes.append("Solution adds trivial wrapper helpers that do not appear to add necessary behavior: " + ", ".join(wrappers[:5]) + ".")
+
+    collection_wrapper_score = 0
+    if re.search(r"\btype\s+\w*(Registry|Manager|Store|Index)\b", solution_patch, re.IGNORECASE):
+        collection_wrapper_score += 1
+    if re.search(r"\bmap\[[^\]]+\]\*\w+Session\b", solution_patch):
+        collection_wrapper_score += 1
+    if re.search(r"\bconsumers\s+\[\]core\.Consumer\b", repo_text) or re.search(r"\[\]\*\w+", repo_text):
+        collection_wrapper_score += 1
+    if collection_wrapper_score >= 3:
+        signals.append("extra_abstraction_layer")
+        notes.append("Solution introduces a registry/manager-style abstraction over collection state where the repo already uses simpler collection patterns.")
 
     unique_signals = list(dict.fromkeys(signals))
     return {"signals": unique_signals, "notes": notes, "should_flag": len(unique_signals) >= 2}
@@ -1339,13 +1426,27 @@ def analyze_agent_solution_diffs(diff_files: List[Path]) -> Dict:
             "structural_non_logic": stats.get("structural_non_logic", 0),
         }
         reports.append(report)
-        if report["conservative"] < 380:
-            issues.append(
-                f"Passed agent solution diff {path.name} is below required conservative LOC minimum ({report['conservative']}; meaningful {report['meaningful']})"
-            )
     if nonempty_count == 0:
         issues.append("No non-empty passed agent solution diffs provided")
-    return {"reports": reports, "issues": issues, "nonempty_count": nonempty_count}
+        return {"reports": reports, "issues": issues, "nonempty_count": nonempty_count, "median_meaningful": 0, "median_conservative": 0}
+
+    meaningful_values = sorted(report["meaningful"] for report in reports)
+    conservative_values = sorted(report["conservative"] for report in reports)
+    median_index = len(reports) // 2
+    median_meaningful = meaningful_values[median_index]
+    median_conservative = conservative_values[median_index]
+
+    if median_meaningful <= 380 or median_conservative <= 380:
+        issues.append(
+            f"Median passed agent solution diff LOC is below required threshold (median meaningful {median_meaningful}; median conservative {median_conservative})"
+        )
+    return {
+        "reports": reports,
+        "issues": issues,
+        "nonempty_count": nonempty_count,
+        "median_meaningful": median_meaningful,
+        "median_conservative": median_conservative,
+    }
 
 
 def normalize_patch_line_endings(patch_path: Path) -> None:
@@ -1674,6 +1775,9 @@ def format_agent_solution_diff_section(agent_diff_analysis: Dict) -> List[str]:
     if not reports:
         lines.append("No non-empty passed agent solution diffs provided.")
         return lines
+    lines.append(
+        f"Median meaningful LOC: {agent_diff_analysis.get('median_meaningful', 0)}; Median conservative LOC: {agent_diff_analysis.get('median_conservative', 0)}"
+    )
     lines.extend(
         format_table(
             ["Diff", "Meaningful LOC", "Conservative LOC", "Raw Added LOC", "Structural/Non-logic"],
@@ -1791,21 +1895,20 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Provide solution.patch and ensure test.patch is available either directly or embedded in setup.sh.")
         elif "added meaningful loc below required minimum" in issue.lower():
             suggestions.append("Expand the hand-authored implementation to >= 380 meaningful LOC.")
-        elif "passed agent solution diff" in issue.lower() and "below required conservative loc minimum" in issue.lower():
+        elif "median passed agent solution diff loc is below required threshold" in issue.lower():
             match = re.search(
-                r"Passed agent solution diff\s+(\S+)\s+is below required conservative LOC minimum \((\d+);\s+meaningful\s+(\d+)\)",
+                r"Median passed agent solution diff LOC is below required threshold \(median meaningful (\d+);\s+median conservative (\d+)\)",
                 issue,
                 re.IGNORECASE,
             )
             if match:
-                diff_name = match.group(1)
+                meaningful_loc = match.group(1)
                 conservative_loc = match.group(2)
-                meaningful_loc = match.group(3)
                 suggestions.append(
-                    f"{diff_name} has conservative LOC {conservative_loc} and meaningful LOC {meaningful_loc}, which is below the required conservative LOC threshold of 380. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass."
+                    f"The median passed agent solution diff has meaningful LOC {meaningful_loc} and conservative LOC {conservative_loc}, which is below the required threshold of greater than 380 for both. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass."
                 )
             else:
-                suggestions.append("A passed agent solution diff is below the required conservative LOC threshold of 380. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass.")
+                suggestions.append("The median passed agent solution diff LOC is below the required threshold of greater than 380 for both meaningful and conservative LOC. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass.")
         elif "no non-empty passed agent solution diffs provided" in issue.lower():
             suggestions.append("Ensure at least one of solutiondiff1.patch, solutiondiff2.patch, or solutiondiff3.patch contains a passed agent solution diff.")
         elif "passed agent solution diff file missing" in issue.lower():
@@ -1840,6 +1943,12 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Remove helper surface and fallback logic that is not clearly required by the spec or exercised by the tests.")
         elif "appear unused or only weakly referenced" in issue.lower():
             suggestions.append("Delete newly added methods/types that are unused or only weakly referenced, unless a test or requirement clearly depends on them.")
+        elif "json/api fields not clearly required" in issue.lower():
+            suggestions.append("Remove response fields that are not explicitly required by the problem or exercised by the tests.")
+        elif "trivial wrapper helpers" in issue.lower():
+            suggestions.append("Inline trivial wrappers unless they add behavior the spec/tests actually require.")
+        elif "registry/manager-style abstraction" in issue.lower():
+            suggestions.append("Prefer the repo's existing collection pattern instead of introducing a separate registry/manager layer unless the simpler approach cannot satisfy the requirements.")
         elif "scope" in issue.lower():
             suggestions.append("Reduce scope to a realistic change that fits the repo's purpose.")
         elif "prescriptive" in issue.lower():
@@ -1894,6 +2003,9 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
     if rereview:
         lines.append(f"- Re-review summary: {rereview.get('summary', 'n/a')}")
     if agent_diff_analysis and agent_diff_analysis.get("reports"):
+        lines.append(
+            f"- Passed agent diff medians: meaningful={agent_diff_analysis.get('median_meaningful', 0)}, conservative={agent_diff_analysis.get('median_conservative', 0)}"
+        )
         for report in agent_diff_analysis["reports"]:
             lines.append(
                 f"- {report['name']}: meaningful={report['meaningful']}, conservative={report['conservative']}, raw_added={report['added']}"
@@ -2199,6 +2311,8 @@ def main():
         solution_notes.append(f"overengineering_signals={len(overengineering['signals'])}")
     if agent_diff_analysis["reports"]:
         solution_notes.append(f"passed_agent_solution_diffs_nonempty={agent_diff_analysis['nonempty_count']}")
+        solution_notes.append(f"agent_diff_median_meaningful={agent_diff_analysis.get('median_meaningful', 0)}")
+        solution_notes.append(f"agent_diff_median_conservative={agent_diff_analysis.get('median_conservative', 0)}")
     set_stage(stage_results, "stage_7_solution", "completed", "; ".join(solution_notes))
 
     problem_checks = problem_analysis["checks"]
