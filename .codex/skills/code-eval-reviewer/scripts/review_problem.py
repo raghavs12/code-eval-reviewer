@@ -1106,6 +1106,30 @@ def added_lines_by_file(diff_text: str) -> Dict[str, List[str]]:
     return files
 
 
+def meaningful_added_lines_by_file(diff_text: str) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    current_file = None
+    in_import_block = False
+    for line in diff_text.splitlines():
+        if line.startswith("+++ ") or line.startswith("--- ") or line.startswith("@@"):
+            if line.startswith("+++ b/"):
+                current_file = line[len("+++ b/"):].strip()
+                in_import_block = False
+            continue
+        if not line.startswith("+") or line.startswith("+++ ") or not current_file:
+            continue
+        if is_generated_file_path(current_file) or is_test_file_path(current_file):
+            continue
+        content = line[1:]
+        if not content.strip():
+            continue
+        meaningful_line = is_meaningful_added_line(content)
+        _, in_import_block = is_conservative_meaningful_added_line(content, in_import_block)
+        if meaningful_line:
+            counts[current_file] = counts.get(current_file, 0) + 1
+    return counts
+
+
 def extract_added_symbols(solution_patch: str) -> List[Dict[str, str]]:
     symbols: List[Dict[str, str]] = []
     current_file = None
@@ -1338,7 +1362,7 @@ def analyze_solution(solution_patch: str, docker_results: Dict, problem_text: st
             ("No AI-generated slop, comments, or artifacts", False),
         ]
         issues.append("solution.patch missing")
-        return {"checks": checks, "issues": issues, "stats": {}, "overengineering": {"signals": [], "notes": [], "should_flag": False}}
+        return {"checks": checks, "issues": issues, "stats": {}, "overengineering": {"signals": [], "notes": [], "should_flag": False}, "patch_text": solution_patch}
 
     stats = diff_stats(solution_patch)
     added = stats["added"]
@@ -1402,13 +1426,16 @@ def analyze_solution(solution_patch: str, docker_results: Dict, problem_text: st
         ("Existing API contracts stay stable", api_stable),
         ("No AI-generated slop, comments, or artifacts", no_ai_slop),
     ]
-    return {"checks": checks, "issues": issues, "stats": stats, "overengineering": overengineering}
+    return {"checks": checks, "issues": issues, "stats": stats, "overengineering": overengineering, "patch_text": solution_patch}
 
 
 def analyze_agent_solution_diffs(diff_files: List[Path]) -> Dict:
     reports = []
     issues = []
     nonempty_count = 0
+    all_touched_files = set()
+    all_roles = set()
+    all_json_fields = set()
     for path in diff_files[:3]:
         if not path.exists():
             issues.append(f"Passed agent solution diff file missing: {path.name}")
@@ -1424,11 +1451,26 @@ def analyze_agent_solution_diffs(diff_files: List[Path]) -> Dict:
             "conservative": stats.get("conservative_meaningful", 0),
             "added": stats.get("added", 0),
             "structural_non_logic": stats.get("structural_non_logic", 0),
+            "touched_files": sorted(meaningful_added_lines_by_file(diff_text).keys()),
+            "roles": sorted({symbol["role"] for symbol in extract_added_symbols(diff_text) if symbol["role"]}),
+            "json_fields": sorted(set(extract_added_json_fields(diff_text))),
         }
         reports.append(report)
+        all_touched_files.update(report["touched_files"])
+        all_roles.update(report["roles"])
+        all_json_fields.update(report["json_fields"])
     if nonempty_count == 0:
         issues.append("No non-empty passed agent solution diffs provided")
-        return {"reports": reports, "issues": issues, "nonempty_count": nonempty_count, "median_meaningful": 0, "median_conservative": 0}
+        return {
+            "reports": reports,
+            "issues": issues,
+            "nonempty_count": nonempty_count,
+            "median_meaningful": 0,
+            "median_conservative": 0,
+            "all_touched_files": [],
+            "all_roles": [],
+            "all_json_fields": [],
+        }
 
     meaningful_values = sorted(report["meaningful"] for report in reports)
     conservative_values = sorted(report["conservative"] for report in reports)
@@ -1446,7 +1488,63 @@ def analyze_agent_solution_diffs(diff_files: List[Path]) -> Dict:
         "nonempty_count": nonempty_count,
         "median_meaningful": median_meaningful,
         "median_conservative": median_conservative,
+        "all_touched_files": sorted(all_touched_files),
+        "all_roles": sorted(all_roles),
+        "all_json_fields": sorted(all_json_fields),
     }
+
+
+def compare_solution_against_agent_diffs(solution_analysis: Dict, agent_diff_analysis: Dict) -> List[str]:
+    issues: List[str] = []
+    reports = agent_diff_analysis.get("reports", []) if agent_diff_analysis else []
+    if not reports:
+        return issues
+
+    median_meaningful = agent_diff_analysis.get("median_meaningful", 0)
+    if median_meaningful > 380:
+        return issues
+
+    stats = solution_analysis.get("stats", {}) or {}
+    solution_meaningful = stats.get("meaningful", 0)
+    solution_conservative = stats.get("conservative_meaningful", 0)
+    if solution_meaningful:
+        issues.append(
+            f"Passed agent solution diffs are much shorter than solution.patch (solution meaningful {solution_meaningful}; solution conservative {solution_conservative}; agent median meaningful {median_meaningful})"
+        )
+
+    solution_patch = solution_analysis.get("patch_text", "")
+    solution_file_counts = meaningful_added_lines_by_file(solution_patch)
+    agent_files = set(agent_diff_analysis.get("all_touched_files", []))
+    extra_solution_files = [
+        f"{path} ({count} meaningful lines)"
+        for path, count in sorted(solution_file_counts.items(), key=lambda item: item[1], reverse=True)
+        if path not in agent_files and count >= 15
+    ]
+    if extra_solution_files:
+        issues.append("Solution patch adds extra files not seen in the shorter passed-agent solutions: " + ", ".join(extra_solution_files[:4]) + ".")
+
+    solution_roles = {symbol["role"] for symbol in extract_added_symbols(solution_patch) if symbol["role"]}
+    agent_roles = set(agent_diff_analysis.get("all_roles", []))
+    extra_roles = sorted(role for role in solution_roles if role and role not in agent_roles)
+    if extra_roles:
+        issues.append("Solution patch adds extra abstraction roles not present in the shorter passed-agent solutions: " + ", ".join(extra_roles[:6]) + ".")
+
+    solution_json_fields = set(extract_added_json_fields(solution_patch))
+    agent_json_fields = set(agent_diff_analysis.get("all_json_fields", []))
+    extra_json_fields = sorted(field for field in solution_json_fields if field not in agent_json_fields)
+    if extra_json_fields:
+        issues.append("Solution patch adds output fields not present in the shorter passed-agent solutions: " + ", ".join(extra_json_fields[:6]) + ".")
+
+    overengineering = solution_analysis.get("overengineering", {}) or {}
+    for note in overengineering.get("notes", [])[:3]:
+        issues.append(f"Solution patch may include unnecessary code: {note}")
+
+    if stats.get("structural_non_logic", 0) >= 50 and stats.get("meaningful", 0) > 0:
+        issues.append(
+            f"Solution patch appears to rely on structural/non-logic LOC inflation ({stats.get('structural_non_logic', 0)} structural lines counted in meaningful LOC)"
+        )
+
+    return list(dict.fromkeys(issues))
 
 
 def normalize_patch_line_endings(patch_path: Path) -> None:
@@ -1905,10 +2003,36 @@ def fix_suggestions(issues: List[str]) -> List[str]:
                 meaningful_loc = match.group(1)
                 conservative_loc = match.group(2)
                 suggestions.append(
-                    f"The median passed agent solution diff has meaningful LOC {meaningful_loc} and conservative LOC {conservative_loc}, which is below the required threshold of greater than 380 for both. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass."
+                    f"The agent median meaningful LOC is {meaningful_loc} and the agent median conservative LOC is {conservative_loc}, both below the required threshold of greater than 380. That indicates the problem may not require a large enough implementation footprint for agents. Use the shorter agent solutions as evidence to review whether solution.patch contains unnecessary abstractions, defensive paths, or helper surface that the problem does not actually need, and whether the tests are too weak to force the intended difficulty."
                 )
             else:
-                suggestions.append("The median passed agent solution diff LOC is below the required threshold of greater than 380 for both meaningful and conservative LOC. When an agent's solution is significantly shorter than the user's, there are usually two possible explanations: the user increased LOC with unnecessary changes or a weak implementation while the agent solved it more efficiently, or the new tests are too weak and allow an incomplete solution to pass.")
+                suggestions.append("The agent median meaningful and conservative LOC are below the required threshold of greater than 380. Use the shorter agent solutions as evidence to review whether solution.patch contains unnecessary abstractions, defensive paths, or helper surface that the problem does not actually need, and whether the tests are too weak to force the intended difficulty.")
+        elif "passed agent solution diffs are much shorter than solution.patch" in issue.lower():
+            match = re.search(
+                r"solution meaningful (\d+);\s*solution conservative (\d+);\s*agent median meaningful (\d+)",
+                issue,
+                re.IGNORECASE,
+            )
+            if match:
+                suggestions.append(
+                    f"solution.patch is materially larger than the passed agent diffs (solution meaningful LOC {match.group(1)}, solution conservative LOC {match.group(2)}, passed-agent median meaningful LOC {match.group(3)}). Review solution.patch for unnecessary abstractions, defensive paths, or helper surface that the shorter passing solutions did not need."
+                )
+            else:
+                suggestions.append("solution.patch is materially larger than the passed agent diffs. Review solution.patch for unnecessary abstractions, defensive paths, or helper surface that the shorter passing solutions did not need.")
+        elif "solution patch may include unnecessary code:" in issue.lower():
+            detail = issue.split(":", 1)[1].strip() if ":" in issue else issue
+            suggestions.append(f"solution.patch appears to include unnecessary code: {detail}")
+        elif "solution patch adds extra files not seen in the shorter passed-agent solutions:" in issue.lower():
+            detail = issue.split(":", 1)[1].strip() if ":" in issue else issue
+            suggestions.append(f"solution.patch introduces extra implementation files beyond what the shorter passed-agent solutions needed: {detail}")
+        elif "solution patch adds extra abstraction roles not present in the shorter passed-agent solutions:" in issue.lower():
+            detail = issue.split(":", 1)[1].strip() if ":" in issue else issue
+            suggestions.append(f"solution.patch introduces extra abstraction layers beyond what the shorter passed-agent solutions needed: {detail}")
+        elif "solution patch adds output fields not present in the shorter passed-agent solutions:" in issue.lower():
+            detail = issue.split(":", 1)[1].strip() if ":" in issue else issue
+            suggestions.append(f"solution.patch adds extra output surface beyond what the shorter passed-agent solutions needed: {detail}")
+        elif "solution patch appears to rely on structural/non-logic loc inflation" in issue.lower():
+            suggestions.append("solution.patch appears to rely on structural or non-logic LOC inflation. Reduce formatting-heavy or boilerplate-heavy additions and keep only logic that is required by the spec and tests.")
         elif "no non-empty passed agent solution diffs provided" in issue.lower():
             suggestions.append("Ensure at least one of solutiondiff1.patch, solutiondiff2.patch, or solutiondiff3.patch contains a passed agent solution diff.")
         elif "passed agent solution diff file missing" in issue.lower():
@@ -2268,11 +2392,13 @@ def main():
     test_analysis = analyze_tests(test_patch_text, main_desc, analysis_repo_dir, docker_results)
     solution_analysis = analyze_solution(solution_patch_text, docker_results, main_desc, test_patch_text, analysis_repo_dir)
     agent_diff_analysis = analyze_agent_solution_diffs(agent_solution_diff_files)
+    agent_diff_solution_comparison_issues = compare_solution_against_agent_diffs(solution_analysis, agent_diff_analysis)
     current_predecision_issues = []
     current_predecision_issues.extend(problem_analysis["issues"])
     current_predecision_issues.extend(test_analysis["issues"])
     current_predecision_issues.extend(solution_analysis["issues"])
     current_predecision_issues.extend(agent_diff_analysis["issues"])
+    current_predecision_issues.extend(agent_diff_solution_comparison_issues)
     if prior_feedback_text:
         rereview = analyze_rereview(prior_feedback_text, current_predecision_issues)
         rereview_notes = [rereview["summary"]]
@@ -2341,6 +2467,7 @@ def main():
     if rereview and rereview.get("new_issues"):
         fixable_issues.append("New issues were introduced in the updated submission")
     fixable_issues.extend(agent_diff_analysis["issues"])
+    fixable_issues.extend(agent_diff_solution_comparison_issues)
 
     if reject_reasons:
         decision = "Reject"
@@ -2361,6 +2488,7 @@ def main():
     issues.extend(test_analysis["issues"])
     issues.extend(solution_analysis["issues"])
     issues.extend(agent_diff_analysis["issues"])
+    issues.extend(agent_diff_solution_comparison_issues)
     issues.extend(fixable_issues)
     if not issues:
         issues.append("No major issues found")

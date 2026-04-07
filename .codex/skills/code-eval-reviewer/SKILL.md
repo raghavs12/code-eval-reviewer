@@ -189,7 +189,7 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
 1. Score the 6 Solution & Code checklist items from `references/creating-challenges.md`.
 2. Verify:
    - non-empty meaningful hand-authored added lines >= 380
-   - exclude test-file changes from meaningful and conservative LOC counts
+   - exclude test-file changes from meaningful, conservative, and meaningful-file-count calculations
    - meaningful file changes >= 3
    - all three `solutiondiff1.patch` to `solutiondiff3.patch` files must be checked
    - at least one of the three must be non-empty
@@ -197,8 +197,9 @@ Confirm the solution is legitimate and satisfies the reviewer-side implementatio
    - the median meaningful LOC must be > 380
    - the median conservative LOC must be > 380
    - for each non-empty passed agent solution diff, report both meaningful LOC and conservative LOC in `feedback.md`
+   - if the passed agent solution diffs are below 380 meaningful LOC, analyze them against `solution.patch` and explain in `feedback.md` what in `solution.patch` appears unnecessary, inflated, or not clearly required
+   - when making that comparison, identify actual patch-derived reasons such as extra files, extra abstraction layers, extra output fields, or weakly justified helper surface in `solution.patch` rather than only restating the LOC gap
    - no generated-file inflation
-   - exclude test files from meaningful and conservative LOC counting when they appear in `solution.patch`
    - blank lines and comment-only lines are always excluded; package lines, import block lines, and braces-only / formatting-only lines may still be counted, but report a conservative LOC figure separately and flag the patch if those structural lines are excessive
    - no padding / dead code / irrelevant changes
    - conservatively audit over-engineering:
