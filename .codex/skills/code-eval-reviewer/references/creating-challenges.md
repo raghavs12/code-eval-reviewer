@@ -21,14 +21,27 @@ Use this file as the source of truth for hard requirements and checklist items.
 6. No irrelevant context
 7. Clear writing and formatting
 
+## Problem Description Review Rules (Hard)
+- The prompt must read naturally, like a developer asking for a change, not like a spec dump or task template.
+- Keep it concise. Mention only what the solver needs. Do not include repo details the solver can discover from the codebase unless they are necessary to define the behavior.
+- Do not frame the repo as an external product description such as "`<repo>` currently supports X but lacks Y".
+- Do not write the request as a checklist, a list of mini-instructions, or rigid titled sections such as `Test assumptions`, `Acceptance criteria`, `Implementation notes`, or similar.
+- Do not prescribe implementation details, internal schema, file locations, exact class names, or exact helper structure unless that detail is part of the required user-facing behavior.
+- Prefer plain English over code fragments. Avoid inline snippets such as `model.update()`, `len(...) == ...`, `float64`, `adaptiveThrottling,omitempty`, or exact format strings when ordinary language would communicate the requirement.
+- Avoid AI-slop phrasing, filler, or generic “comprehensive / robust / seamless” language.
+
 ## Test Patch Requirements (Hard)
 - Valid unified git patch
 - Only test changes, no implementation code
 - Does not conflict with the solution patch
 - No internet required at runtime
 - Includes a test.sh script with two modes:
-  - ./test.sh base (must pass on base commit)
-  - ./test.sh new (must fail on base commit)
+  - `./test.sh --output_path <path> base` must run the regression suite and pass on the base commit
+  - `./test.sh --output_path <path> new` must run only the new/modified tests and fail on the base commit
+- `test.sh` must always write JUnit XML to the requested output path in both modes, including when the runner exits non-zero because tests failed
+- Prefer the test framework's built-in JUnit reporter. A standard converter from a stable machine-readable format such as TAP to JUnit is also acceptable when the framework does not support JUnit directly
+- Do not hand-roll XML generation in shell, Node, Python, awk, or similar custom scripts
+- If base mode excludes upstream tests, every exclusion must have a concrete reason such as network use, browser requirements, or sandbox-only flakiness, and the exclusion must not hide the area touched by the task
 - Determinism: no timing-based assertions, no race conditions, no randomness, no network access
 
 ## Test Checklist (8)
@@ -46,7 +59,7 @@ Use this file as the source of truth for hard requirements and checklist items.
 - Does not conflict with the test patch
 - No new dependencies that require internet at runtime
 - Only implementation changes (no Dockerfile modifications)
-- With test and solution patches applied: ./test.sh base passes and ./test.sh new passes
+- With test and solution patches applied: `./test.sh --output_path <path> base` passes and `./test.sh --output_path <path> new` passes
 - Scope requirement: system-level and multi-file at the challenge level (validated by Shipd agent runs)
 - Agent-run requirement: median of successful runs >= 3 files modified and >= 100 agent messages (validated externally)
 - Reviewer LOC requirement: solution.patch must add >= 380 non-empty meaningful hand-authored lines (enforced during review; request changes if below 380)

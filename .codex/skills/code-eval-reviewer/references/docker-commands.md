@@ -19,17 +19,24 @@ git apply test.patch
 docker build -t shipd/<repo-name> -f Dockerfile .
 
 # Run container with NO network
-docker run -it --network=none shipd/<repo-name>
+docker run --rm --network=none shipd/<repo-name> bash -lc '
+  sed -i "s/\r$//" ./test.sh
+  rm -f /tmp/base-results.xml
+  ./test.sh --output_path /tmp/base-results.xml base
+'
 
-# Inside container:
-sed -i 's/\r$//' ./test.sh    # Fix Windows line endings
-./test.sh base                 # MUST PASS
-./test.sh new                  # MUST FAIL
+docker run --rm --network=none shipd/<repo-name> bash -lc '
+  sed -i "s/\r$//" ./test.sh
+  rm -f /tmp/new-results.xml
+  ./test.sh --output_path /tmp/new-results.xml new
+'
 ```
 
 **Expected Results:**
-- `./test.sh base` → Exit 0 (PASS)
-- `./test.sh new` → Exit non-0 (FAIL)
+- Base mode exits `0`
+- New mode exits non-zero
+- `/tmp/base-results.xml` and `/tmp/new-results.xml` both exist and are valid JUnit XML
+- The XML written by new mode records at least one failure
 
 ---
 
@@ -43,17 +50,24 @@ git apply solution.patch
 docker build -t shipd/<repo-name> -f Dockerfile .
 
 # Run container with NO network
-docker run -it --network=none shipd/<repo-name>
+docker run --rm --network=none shipd/<repo-name> bash -lc '
+  sed -i "s/\r$//" ./test.sh
+  rm -f /tmp/base-results.xml
+  ./test.sh --output_path /tmp/base-results.xml base
+'
 
-# Inside container:
-sed -i 's/\r$//' ./test.sh    # Fix Windows line endings
-./test.sh base                 # MUST PASS
-./test.sh new                  # MUST PASS
+docker run --rm --network=none shipd/<repo-name> bash -lc '
+  sed -i "s/\r$//" ./test.sh
+  rm -f /tmp/new-results.xml
+  ./test.sh --output_path /tmp/new-results.xml new
+'
 ```
 
 **Expected Results:**
-- `./test.sh base` → Exit 0 (PASS)
-- `./test.sh new` → Exit 0 (PASS)
+- Base mode exits `0`
+- New mode exits `0`
+- `/tmp/base-results.xml` and `/tmp/new-results.xml` both exist and are valid JUnit XML
+- The XML written by both modes records zero failures
 
 ---
 
@@ -61,10 +75,10 @@ sed -i 's/\r$//' ./test.sh    # Fix Windows line endings
 
 | Phase | Command | Expected |
 |-------|---------|----------|
-| Pre-solution | `./test.sh base` | PASS |
-| Pre-solution | `./test.sh new` | FAIL |
-| Post-solution | `./test.sh base` | PASS |
-| Post-solution | `./test.sh new` | PASS |
+| Pre-solution | `./test.sh --output_path /tmp/base-results.xml base` | Exit 0 + valid XML |
+| Pre-solution | `./test.sh --output_path /tmp/new-results.xml new` | Exit non-zero + valid XML with failures |
+| Post-solution | `./test.sh --output_path /tmp/base-results.xml base` | Exit 0 + valid XML |
+| Post-solution | `./test.sh --output_path /tmp/new-results.xml new` | Exit 0 + valid XML |
 
 ---
 
@@ -116,13 +130,26 @@ git apply --3way test.patch
 ### Network Issues
 Always use `--network=none` to ensure tests run offline:
 ```bash
-docker run -it --network=none shipd/<repo-name>
+docker run --rm --network=none shipd/<repo-name> bash -lc '<command>'
 ```
 
 ### Build Cache Issues
 ```bash
 # Force rebuild without cache
 docker build --no-cache -t shipd/<repo-name> -f Dockerfile .
+```
+
+### XML Validation
+After each run, verify that the XML file exists and parses:
+
+```bash
+python - <<'PY'
+import xml.etree.ElementTree as ET
+ET.parse('/tmp/base-results.xml')
+print('base xml ok')
+ET.parse('/tmp/new-results.xml')
+print('new xml ok')
+PY
 ```
 
 ---
@@ -133,12 +160,14 @@ docker build --no-cache -t shipd/<repo-name> -f Dockerfile .
 - [ ] Test patch applies cleanly
 - [ ] Docker builds successfully
 - [ ] Container runs with `--network=none`
-- [ ] `./test.sh base` passes (pre-solution)
-- [ ] `./test.sh new` fails (pre-solution)
+- [ ] `./test.sh --output_path ... base` passes (pre-solution)
+- [ ] `./test.sh --output_path ... new` fails (pre-solution)
+- [ ] Both pre-solution modes still write JUnit XML
 - [ ] Solution patch applies cleanly
 - [ ] Docker rebuilds successfully
-- [ ] `./test.sh base` passes (post-solution)
-- [ ] `./test.sh new` passes (post-solution)
+- [ ] `./test.sh --output_path ... base` passes (post-solution)
+- [ ] `./test.sh --output_path ... new` passes (post-solution)
+- [ ] Both post-solution modes write valid JUnit XML with zero failures
 
 ---
 
@@ -149,3 +178,4 @@ docker build --no-cache -t shipd/<repo-name> -f Dockerfile .
 - Replace `<commit-hash>` with actual commit hash
 - Do NOT edit problem files during verification
 - Always run container with `--network=none`
+- Missing XML is a blocker even if the exit code matches the expected pass/fail state

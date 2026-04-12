@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -101,6 +102,170 @@ def extract_test_sh_created_by_patch(test_patch_text: str) -> bool:
     if not test_patch_text:
         return False
     return bool(re.search(r"^\+\+\+\s+b/test\.sh$", test_patch_text, re.MULTILINE))
+
+
+def extract_patched_file_content(patch_text: str, target_name: str) -> str:
+    if not patch_text:
+        return ""
+    target = target_name.replace("\\", "/")
+    lines: List[str] = []
+    capturing = False
+    for line in patch_text.splitlines():
+        if line.startswith("diff --git "):
+            capturing = False
+            continue
+        if line.startswith("+++ b/"):
+            current = line[len("+++ b/"):].strip().replace("\\", "/")
+            capturing = current == target
+            continue
+        if not capturing:
+            continue
+        if line.startswith(("--- ", "@@", "index ", "new file mode ", "deleted file mode ", "old mode ", "new mode ")):
+            continue
+        if line.startswith("+") and not line.startswith("+++ "):
+            lines.append(line[1:])
+        elif line.startswith(" "):
+            lines.append(line[1:])
+    return "\n".join(lines).strip()
+
+
+def parse_junit_xml_text(xml_text: str) -> Dict[str, object]:
+    if not xml_text.strip():
+        return {"present": False, "valid": False, "tests": 0, "failures": 0, "errors": 0, "parse_error": "empty xml"}
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        return {"present": True, "valid": False, "tests": 0, "failures": 0, "errors": 0, "parse_error": str(exc)}
+
+    tests = failures = errors = 0
+    if root.tag == "testsuite":
+        tests = int(root.attrib.get("tests", "0") or 0)
+        failures = int(root.attrib.get("failures", "0") or 0)
+        errors = int(root.attrib.get("errors", "0") or 0)
+    elif root.tag == "testsuites":
+        suites = root.findall("testsuite")
+        tests = sum(int(s.attrib.get("tests", "0") or 0) for s in suites)
+        failures = sum(int(s.attrib.get("failures", "0") or 0) for s in suites)
+        errors = sum(int(s.attrib.get("errors", "0") or 0) for s in suites)
+    else:
+        return {"present": True, "valid": False, "tests": 0, "failures": 0, "errors": 0, "parse_error": f"unexpected root tag {root.tag}"}
+
+    return {"present": True, "valid": True, "tests": tests, "failures": failures, "errors": errors, "parse_error": ""}
+
+
+def extract_marked_block(text: str, begin_marker: str, end_marker: str) -> str:
+    pattern = re.escape(begin_marker) + r"\n([\s\S]*?)\n" + re.escape(end_marker)
+    match = re.search(pattern, text)
+    return match.group(1).strip() if match else ""
+
+
+def analyze_test_sh(test_patch: str) -> Dict[str, object]:
+    issues: List[str] = []
+    notes: List[str] = []
+    test_sh_text = extract_patched_file_content(test_patch, "test.sh")
+    if not test_sh_text:
+        return {
+            "present": False,
+            "issues": ["test.patch does not add or modify test.sh"],
+            "notes": [],
+            "uses_standard_junit": False,
+            "manual_xml": False,
+            "has_output_path": False,
+            "writes_output_path": False,
+            "captures_failure_status": False,
+        }
+
+    has_output_path = "--output_path" in test_sh_text and "OUTPUT_PATH" in test_sh_text
+    has_modes = bool(re.search(r"\bbase\|new\b|\{base\|new\}", test_sh_text)) or (
+        "base)" in test_sh_text and "new)" in test_sh_text
+    )
+    writes_output_path = bool(
+        re.search(r"OUTPUT_PATH", test_sh_text)
+        and (
+            re.search(r'>\s*"\$OUTPUT_PATH"', test_sh_text)
+            or re.search(r'>\s*\$OUTPUT_PATH\b', test_sh_text)
+            or re.search(r'--junitxml(?:=|\s+)"?\$OUTPUT_PATH', test_sh_text)
+            or re.search(r'outputFile\s+"?\$OUTPUT_PATH', test_sh_text)
+            or re.search(r'junit[^\n]*OUTPUT_PATH', test_sh_text, re.IGNORECASE)
+        )
+    )
+
+    standard_patterns = [
+        r"--junitxml(?:=|\s+)",
+        r"\bgo-junit-report\b",
+        r"\bjest-junit\b",
+        r"--reporter=junit\b",
+        r"--reporter\s+junit\b",
+        r"\bmocha-junit-reporter\b",
+        r"\brspec_junit_formatter\b",
+        r"\btap-xunit\b",
+        r"\bjunitxml\b",
+    ]
+    uses_standard_junit = any(re.search(pattern, test_sh_text, re.IGNORECASE) for pattern in standard_patterns)
+
+    manual_xml_patterns = [
+        r"<testsuite",
+        r"<testcase",
+        r"ElementTree",
+        r"fs\.writeFileSync\([^)]*OUTPUT_PATH",
+        r"writeFileSync\([^)]*OUTPUT_PATH",
+        r"cat\s+<<.*xml",
+        r"printf\s+['\"].*testsuite",
+    ]
+    manual_xml = any(re.search(pattern, test_sh_text, re.IGNORECASE) for pattern in manual_xml_patterns)
+
+    captures_failure_status = bool(
+        re.search(r"\|\|\s*STATUS=\$\?", test_sh_text)
+        or re.search(r"\bSTATUS=\$\?\b", test_sh_text)
+        or ("set +e" in test_sh_text and "set -e" in test_sh_text)
+    )
+    risky_set_e = bool(re.search(r"^\s*set\s+-[^\n]*e", test_sh_text, re.MULTILINE)) and not captures_failure_status
+
+    base_exclusion_patterns = [
+        r"--testPathIgnorePatterns",
+        r"--ignore(?:=|\s)",
+        r"--match\s*=\s*['\"]!",
+        r"--match=['\"]!",
+        r"\bexclude\b",
+        r"\bskip\b",
+    ]
+    has_base_exclusions = any(re.search(pattern, test_sh_text, re.IGNORECASE) for pattern in base_exclusion_patterns)
+    exclusion_reasoned = bool(
+        re.search(r"#.*(because|needs|network|browser|sandbox|flake|timing|cpu|does not involve|neither involves|not in the .* path)", test_sh_text, re.IGNORECASE)
+    )
+
+    if not has_output_path:
+        issues.append("test.sh does not accept the required --output_path <path> interface")
+    if not has_modes:
+        issues.append("test.sh does not clearly support exactly the required base/new modes")
+    if not writes_output_path:
+        issues.append("test.sh does not clearly write JUnit XML to the requested output path")
+    if not uses_standard_junit:
+        issues.append("test.sh does not appear to use a standard JUnit reporter or approved converter")
+    if manual_xml:
+        issues.append("test.sh appears to generate XML manually instead of using a standard JUnit reporter/converter")
+    if risky_set_e:
+        issues.append("test.sh may exit before writing XML on failing test runs")
+    if has_base_exclusions and not exclusion_reasoned:
+        issues.append("Base-mode test exclusions do not include concrete reviewer-facing reasons")
+
+    if uses_standard_junit:
+        notes.append("Uses a standard JUnit reporter or converter")
+    if captures_failure_status:
+        notes.append("Captures failing test status explicitly before exiting")
+    if has_base_exclusions and exclusion_reasoned:
+        notes.append("Documents concrete reasons for base-mode exclusions")
+
+    return {
+        "present": True,
+        "issues": issues,
+        "notes": notes,
+        "uses_standard_junit": uses_standard_junit,
+        "manual_xml": manual_xml,
+        "has_output_path": has_output_path,
+        "writes_output_path": writes_output_path,
+        "captures_failure_status": captures_failure_status,
+    }
 
 
 def count_words(text: str) -> int:
@@ -719,6 +884,7 @@ def analyze_problem(text: str) -> Dict:
     issues = []
     ambiguity_flags = []
     prescriptiveness_flags = []
+    naturalness_flags = []
 
     ambiguous_terms = [
         "maybe", "probably", "approximately", "around", "as needed", "as appropriate",
@@ -734,6 +900,38 @@ def analyze_problem(text: str) -> Dict:
     ]
     scope_blowup = ["rewrite", "entire", "whole system", "from scratch"]
     repo_philosophy_violations = ["new framework", "different framework", "ignore existing", "custom runtime"]
+    rigid_heading_patterns = [
+        r"^\s*#+\s*(requirements|acceptance criteria|implementation notes|test assumptions|solution outline)\b",
+        r"^\s*(requirements|acceptance criteria|implementation notes|test assumptions)\s*:\s*$",
+    ]
+    external_repo_framing = [
+        r"^\s*[A-Z][A-Za-z0-9_-]+\s+currently\b",
+        r"\bcurrently supports\b",
+        r"\blacks\b",
+        r"\bdoes not yet support\b",
+    ]
+    ai_slop_patterns = [
+        r"\bcomprehensive\b",
+        r"\bseamless\b",
+        r"\brobust(?:ly|ness)?\b",
+        r"\bcarefully crafted\b",
+        r"\buser-friendly\b",
+        r"\bend-to-end solution\b",
+    ]
+    code_fragment_patterns = [
+        r"`[^`]+`",
+        r"\b\w+\.\w+\(",
+        r"\b[A-Za-z_]\w*::[A-Za-z_]\w*\b",
+        r"\bfloat\d+\b",
+        r"==|!=|<=|>=",
+        r'"\w+[^"]*,omitempty"',
+        r"%\.\df",
+    ]
+    repo_detail_patterns = [
+        r"\b[\w./-]+\.(py|ts|tsx|js|jsx|go|rs|java|rb)\b",
+        r"\bsrc/[\w./-]+\b",
+        r"\bpackages?/[\w./-]+\b",
+    ]
 
     req_complete = not re.search(r"\b(see|refer to|as described in)\b", text, re.IGNORECASE) and not re.search(r"\b(TBD|TODO|WIP)\b", text)
     if not req_complete:
@@ -747,7 +945,7 @@ def analyze_problem(text: str) -> Dict:
                 ambiguity_flags.append(sentence)
 
     prescriptive = any(re.search(p, text, re.IGNORECASE) for p in prescriptive_patterns)
-    concise = word_count <= 250
+    concise = word_count <= 220
     concise_not_prescriptive = concise and not prescriptive
     if not concise:
         issues.append(f"Problem description too long ({word_count} words)")
@@ -765,14 +963,40 @@ def analyze_problem(text: str) -> Dict:
     if not aligns_philosophy:
         issues.append("Problem conflicts with repo design philosophy")
 
-    no_irrelevant = word_count <= 250 and not re.search(r"\b(background|story|narrative)\b", text, re.IGNORECASE)
+    no_irrelevant = word_count <= 220 and not re.search(r"\b(background|story|narrative)\b", text, re.IGNORECASE)
     if not no_irrelevant:
         issues.append("Contains irrelevant context")
 
-    has_structure = bool(re.search(r"^#+\s+|\n\s*[-*]\s+", text, re.MULTILINE))
-    clear_writing = has_structure or word_count <= 200
+    bullet_count = len(re.findall(r"^\s*[-*]\s+", text, re.MULTILINE))
+    numbered_count = len(re.findall(r"^\s*\d+\.\s+", text, re.MULTILINE))
+    rigid_headings = any(re.search(pattern, text, re.IGNORECASE | re.MULTILINE) for pattern in rigid_heading_patterns)
+    list_heavy = (bullet_count + numbered_count) >= 4
+    repo_external = any(re.search(pattern, text, re.IGNORECASE | re.MULTILINE) for pattern in external_repo_framing)
+    ai_slop = any(re.search(pattern, text, re.IGNORECASE) for pattern in ai_slop_patterns)
+    code_fragment_count = sum(len(re.findall(pattern, text, re.IGNORECASE)) for pattern in code_fragment_patterns)
+    repo_detail_count = sum(len(re.findall(pattern, text, re.IGNORECASE)) for pattern in repo_detail_patterns)
+    clear_writing = word_count <= 200 and not rigid_headings and not list_heavy
     if not clear_writing:
         issues.append("Writing/formatting is hard to scan")
+
+    if rigid_headings:
+        issues.append("Problem description uses rigid titled sections instead of a natural prompt")
+        naturalness_flags.append("Rigid section headings make the prompt read like a spec template instead of a natural request.")
+    if list_heavy:
+        issues.append("Problem description reads like a list of requests instead of a natural prompt")
+        naturalness_flags.append("The request is too list-heavy and loses a natural flow.")
+    if repo_external:
+        issues.append("Problem description frames the repo as an external product instead of a natural developer request")
+        naturalness_flags.append("Repo-external framing detected.")
+    if ai_slop:
+        issues.append("Problem description contains AI-slop or filler phrasing")
+        naturalness_flags.append("AI-slop or filler wording detected.")
+    if code_fragment_count >= 4:
+        issues.append("Problem description relies on code fragments where plain English would be clearer")
+        naturalness_flags.append("Too many inline code fragments or implementation-shaped tokens in the prompt.")
+    if repo_detail_count >= 3:
+        issues.append("Problem description includes too many discoverable repo details")
+        naturalness_flags.append("Prompt leaks discoverable file or repo details that should stay in the codebase.")
 
     implied = find_implied_contracts(text)
     schema_issues = find_schema_prescription(text)
@@ -785,11 +1009,13 @@ def analyze_problem(text: str) -> Dict:
         ambiguity_flags.extend(implied + ambiguity_issues)
     if schema_issues:
         prescriptiveness_flags.extend(schema_issues)
+    if naturalness_flags:
+        prescriptiveness_flags.extend(naturalness_flags)
 
     checks = [
         ("Requirements are complete and self-contained", req_complete),
         ("No ambiguities, fully deterministic", no_ambiguity),
-        ("Problem is concise and not prescriptive", concise_not_prescriptive),
+        ("Problem is concise and not prescriptive", concise_not_prescriptive and not rigid_headings and not repo_external and code_fragment_count < 4),
         ("Matches real-world repo scope", matches_scope),
         ("Aligns with repo's design philosophy", aligns_philosophy),
         ("No irrelevant context", no_irrelevant),
@@ -823,6 +1049,7 @@ def test_case_count(test_patch: str) -> int:
 def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], docker_results: Dict) -> Dict:
     issues = []
     checks = []
+    test_sh_analysis = analyze_test_sh(test_patch)
 
     if not test_patch:
         checks = [
@@ -836,7 +1063,7 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
             ("No checks for unspecified behavior", False),
         ]
         issues.append("test.patch missing")
-        return {"checks": checks, "issues": issues, "alignment": {"spec_rows": [], "assertion_rows": []}, "fairness_issues": []}
+        return {"checks": checks, "issues": issues, "alignment": {"spec_rows": [], "assertion_rows": []}, "fairness_issues": [], "test_sh": test_sh_analysis}
 
     exposes_missing = docker_results.get("new_only_fail", False)
     if not exposes_missing:
@@ -851,11 +1078,28 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     if not deterministic:
         issues.append("Potential nondeterminism in tests")
 
-    assert_lines = re.findall(r"\bassert\b[^\n]*", test_patch)
-    weak_asserts = [a for a in assert_lines if re.search(r"is not None|!=\s*None|len\(|truthy|not None", a)]
-    assertions_ok = not (assert_lines and len(weak_asserts) == len(assert_lines))
+    assertion_patterns = [
+        r"\bassert\b[^\n]*",
+        r"\bexpect\([^\n]*",
+        r"\bt\.(?:is|deepEqual|like|true|false|throws|throwsAsync|regex|notRegex)\([^\n]*",
+    ]
+    assertion_lines: List[str] = []
+    for pattern in assertion_patterns:
+        assertion_lines.extend(re.findall(pattern, test_patch))
+    weak_assert_patterns = [
+        r"\bassert\s+True\b",
+        r"\bassert\s+len\(.+\)\s*>\s*0",
+        r"\btruthy\b",
+        r"\bnot None\b",
+        r"\bis not None\b",
+        r"\bt\.true\(.+\.length\s*>\s*0\)",
+        r"\bexpect\(.+\)\.to(Be|\.be)?Truthy\(",
+        r"\bexpect\(.+\)\.to\.be\.ok\b",
+    ]
+    weak_asserts = [line for line in assertion_lines if any(re.search(pattern, line) for pattern in weak_assert_patterns)]
+    assertions_ok = bool(assertion_lines) and len(weak_asserts) < len(assertion_lines)
     if not assertions_ok:
-        issues.append("Assertions look weak or non-specific")
+        issues.append("Assertions are missing, weak, or too non-specific")
     elif weak_asserts:
         issues.append("Some assertions may allow a partial or wrong implementation to pass")
 
@@ -894,6 +1138,36 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     if not no_redundancy:
         issues.append("Redundant or repetitive tests detected")
 
+    if test_sh_analysis["issues"]:
+        issues.extend(test_sh_analysis["issues"])
+
+    junit_runs = docker_results.get("junit_runs", {})
+    pre_base_run = junit_runs.get("pre_base", {})
+    pre_new_run = junit_runs.get("pre_new", {})
+    post_base_run = junit_runs.get("post_base", {})
+    post_new_run = junit_runs.get("post_new", {})
+
+    for label, run in [
+        ("base mode before solution", pre_base_run),
+        ("new mode before solution", pre_new_run),
+        ("base mode with solution", post_base_run),
+        ("new mode with solution", post_new_run),
+    ]:
+        if run and not run.get("xml_present", True):
+            issues.append(f"JUnit XML missing for {label}")
+        elif run and not run.get("xml_valid", True):
+            issues.append(f"JUnit XML is invalid for {label}")
+
+    if pre_new_run:
+        if pre_new_run.get("xml_valid") and (pre_new_run.get("xml_failures", 0) + pre_new_run.get("xml_errors", 0) <= 0):
+            issues.append("Pre-solution new-mode XML does not record any failures")
+    if post_base_run:
+        if post_base_run.get("xml_valid") and (post_base_run.get("xml_failures", 0) + post_base_run.get("xml_errors", 0) != 0):
+            issues.append("Post-solution base-mode XML still records failures")
+    if post_new_run:
+        if post_new_run.get("xml_valid") and (post_new_run.get("xml_failures", 0) + post_new_run.get("xml_errors", 0) != 0):
+            issues.append("Post-solution new-mode XML still records failures")
+
     contracts = split_compound_requirements(requirement_sentences(desc_text))
     test_cases = extract_test_cases(test_patch)
     spec_rows, assertion_rows = build_alignment_tables(contracts, test_patch)
@@ -910,6 +1184,10 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
     fairness_issues.extend(multiple_valid_interpretations_issues(desc_text, test_patch))
     fairness_issues.extend(undocumented_surface_issues(desc_text, test_patch, repo_dir))
     fairness_issues.extend(workaround_solution_issues(contracts, test_patch))
+    if re.search(r"\b(cli flag|command line|--[a-z0-9-]+)\b", desc_text, re.IGNORECASE) and not re.search(r"--[a-z0-9-]+", test_patch, re.IGNORECASE):
+        fairness_issues.append("The problem mentions CLI behavior, but the tests do not clearly exercise the CLI entry point.")
+    if re.search(r"\b(config option|configuration|setting)\b", desc_text, re.IGNORECASE) and not re.search(r"\b(config|settings?|options?)\b", test_patch, re.IGNORECASE):
+        fairness_issues.append("The problem mentions configuration behavior, but the tests do not clearly exercise that user-facing entry point.")
     if fairness_issues:
         issues.extend(fairness_issues)
 
@@ -937,6 +1215,7 @@ def analyze_tests(test_patch: str, desc_text: str, repo_dir: Optional[Path], doc
         "fairness_issues": fairness_issues,
         "alignment": {"spec_rows": spec_rows, "assertion_rows": assertion_rows},
         "weak_assertions": weak_asserts[:5],
+        "test_sh": test_sh_analysis,
     }
 
 
@@ -1575,6 +1854,53 @@ def apply_patch_checked(patch_path: Path, repo_dir: Path) -> Tuple[bool, str]:
     return False, f"Patch fails to apply: {err}"
 
 
+def run_docker_test_mode(image_name: str, mode: str) -> Dict[str, object]:
+    xml_path = f"/tmp/{mode}-results.xml"
+    command = (
+        "sed -i 's/\\r$//' ./test.sh; "
+        f"xml='{xml_path}'; "
+        "rm -f \"$xml\"; "
+        f"./test.sh --output_path \"$xml\" {mode}; "
+        "status=$?; "
+        "echo '__CODEX_XML_STATUS__='$status; "
+        "if [ -f \"$xml\" ]; then "
+        "echo '__CODEX_XML_BEGIN__'; "
+        "cat \"$xml\"; "
+        "echo '__CODEX_XML_END__'; "
+        "else "
+        "echo '__CODEX_XML_MISSING__'; "
+        "fi; "
+        "exit $status"
+    )
+    code, stdout, stderr = run_command(
+        ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", command]
+    )
+    combined = stdout + stderr
+    xml_text = extract_marked_block(combined, "__CODEX_XML_BEGIN__", "__CODEX_XML_END__")
+    junit_summary = parse_junit_xml_text(xml_text) if xml_text else {
+        "present": "__CODEX_XML_MISSING__" not in combined and "__CODEX_XML_BEGIN__" in combined,
+        "valid": False,
+        "tests": 0,
+        "failures": 0,
+        "errors": 0,
+        "parse_error": "xml missing",
+    }
+    if "__CODEX_XML_MISSING__" in combined:
+        junit_summary = {"present": False, "valid": False, "tests": 0, "failures": 0, "errors": 0, "parse_error": "xml missing"}
+    return {
+        "exit_code": code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "logs": combined,
+        "xml_present": bool(junit_summary.get("present")),
+        "xml_valid": bool(junit_summary.get("valid")),
+        "xml_tests": int(junit_summary.get("tests", 0) or 0),
+        "xml_failures": int(junit_summary.get("failures", 0) or 0),
+        "xml_errors": int(junit_summary.get("errors", 0) or 0),
+        "xml_parse_error": str(junit_summary.get("parse_error", "")),
+    }
+
+
 def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, skip_docker: bool = False, extracted_files: Optional[Dict[str, Optional[Path]]] = None) -> Dict:
     results = {
         "build_success": False,
@@ -1583,6 +1909,7 @@ def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, 
         "solution_base_pass": False,
         "solution_new_pass": False,
         "logs": {},
+        "junit_runs": {},
         "repo_dir": None,
         "analysis_repo_dir": None,
         "extraction_errors": [],
@@ -1625,40 +1952,32 @@ def run_docker_verification(problem_dir: Path, repo_url: str, commit_hash: str, 
             return results
         results["build_success"] = True
 
-        code, stdout, stderr = run_command(
-            ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh base"],
-            cwd=str(repo_dir),
-        )
-        results["base_only_pass"] = (code == 0)
-        results["logs"]["base_only"] = stdout + stderr
+        pre_base = run_docker_test_mode(image_name, "base")
+        results["base_only_pass"] = (pre_base["exit_code"] == 0)
+        results["logs"]["base_only"] = pre_base["logs"]
+        results["junit_runs"]["pre_base"] = pre_base
 
         if test_patch:
             apply_patch_checked(test_patch, repo_dir)
             run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
-            code, stdout, stderr = run_command(
-                ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh new"],
-                cwd=str(repo_dir),
-            )
-            results["new_only_fail"] = (code != 0)
-            results["logs"]["new_without_solution"] = stdout + stderr
+            pre_new = run_docker_test_mode(image_name, "new")
+            results["new_only_fail"] = (pre_new["exit_code"] != 0)
+            results["logs"]["new_without_solution"] = pre_new["logs"]
+            results["junit_runs"]["pre_new"] = pre_new
 
         if solution_patch:
             apply_patch_checked(solution_patch, repo_dir)
             run_command(["docker", "build", "-t", image_name, "-f", "Dockerfile", "."], cwd=str(repo_dir))
 
-            code, stdout, stderr = run_command(
-                ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh base"],
-                cwd=str(repo_dir),
-            )
-            results["solution_base_pass"] = (code == 0)
-            results["logs"]["base_with_solution"] = stdout + stderr
+            post_base = run_docker_test_mode(image_name, "base")
+            results["solution_base_pass"] = (post_base["exit_code"] == 0)
+            results["logs"]["base_with_solution"] = post_base["logs"]
+            results["junit_runs"]["post_base"] = post_base
 
-            code, stdout, stderr = run_command(
-                ["docker", "run", "--rm", "--network=none", image_name, "bash", "-lc", "sed -i 's/\\r$//' ./test.sh && ./test.sh new"],
-                cwd=str(repo_dir),
-            )
-            results["solution_new_pass"] = (code == 0)
-            results["logs"]["new_with_solution"] = stdout + stderr
+            post_new = run_docker_test_mode(image_name, "new")
+            results["solution_new_pass"] = (post_new["exit_code"] == 0)
+            results["logs"]["new_with_solution"] = post_new["logs"]
+            results["junit_runs"]["post_new"] = post_new
 
         return results
     finally:
@@ -1972,6 +2291,14 @@ def summarize_solution(solution_analysis: Dict) -> str:
 def summarize_verification(docker_results: Dict) -> str:
     if docker_results.get("skipped"):
         return "Verification: Docker verification skipped."
+    junit_runs = docker_results.get("junit_runs", {})
+    if any(run and (not run.get("xml_present") or not run.get("xml_valid")) for run in junit_runs.values()):
+        return "Verification: Docker runs did not consistently produce valid JUnit XML for every required phase."
+    pre_new = junit_runs.get("pre_new", {})
+    post_new = junit_runs.get("post_new", {})
+    if pre_new and pre_new.get("xml_valid") and post_new and post_new.get("xml_valid"):
+        if pre_new.get("xml_failures", 0) + pre_new.get("xml_errors", 0) > 0 and post_new.get("xml_failures", 0) + post_new.get("xml_errors", 0) == 0:
+            return "Verification: Docker runs show the expected pass/fail transitions and valid JUnit XML for each phase."
     return (
         "Verification: Docker runs confirm base tests pass, new tests fail pre-solution, "
         "and both base/new pass after applying the solution."
@@ -1989,6 +2316,12 @@ def fix_suggestions(issues: List[str]) -> List[str]:
             suggestions.append("Ensure solution.patch fully implements the required behavior so both base/new pass.")
         elif "docker build failed" in issue.lower() or "dockerfile" in issue.lower():
             suggestions.append("Fix Dockerfile to build offline and run tests with --network none.")
+        elif "junit xml missing" in issue.lower() or "invalid for" in issue.lower():
+            suggestions.append("Update test.sh so every required run writes valid JUnit XML to --output_path, including failing pre-solution runs.")
+        elif "standard junit reporter" in issue.lower() or "generate xml manually" in issue.lower():
+            suggestions.append("Replace custom XML generation with a native JUnit reporter or a standard converter such as tap-xunit.")
+        elif "output_path" in issue.lower() and "test.sh" in issue.lower():
+            suggestions.append("Make test.sh accept --output_path <path> and write the JUnit XML report there in both base and new modes.")
         elif "missing required patch files" in issue.lower():
             suggestions.append("Provide solution.patch and ensure test.patch is available either directly or embedded in setup.sh.")
         elif "added meaningful loc below required minimum" in issue.lower():
@@ -2124,6 +2457,10 @@ def build_reasoning(problem_analysis: Dict, test_analysis: Dict, solution_analys
         lines.append(f"- Docker new fail (pre-solution): {docker_results.get('new_only_fail', False)}")
         lines.append(f"- Docker base pass (with solution): {docker_results.get('solution_base_pass', False)}")
         lines.append(f"- Docker new pass (with solution): {docker_results.get('solution_new_pass', False)}")
+        for run_name, run in docker_results.get("junit_runs", {}).items():
+            lines.append(
+                f"- {run_name} junit: present={run.get('xml_present', False)} valid={run.get('xml_valid', False)} tests={run.get('xml_tests', 0)} failures={run.get('xml_failures', 0)} errors={run.get('xml_errors', 0)}"
+            )
     if rereview:
         lines.append(f"- Re-review summary: {rereview.get('summary', 'n/a')}")
     if agent_diff_analysis and agent_diff_analysis.get("reports"):
@@ -2382,6 +2719,10 @@ def main():
         docker_notes.append(f"new_pre={docker_results.get('new_only_fail', False)}")
         docker_notes.append(f"base_post={docker_results.get('solution_base_pass', False)}")
         docker_notes.append(f"new_post={docker_results.get('solution_new_pass', False)}")
+        for run_name, run in docker_results.get("junit_runs", {}).items():
+            docker_notes.append(
+                f"{run_name}_xml={'ok' if run.get('xml_present') and run.get('xml_valid') else 'bad'}"
+            )
     set_stage(stage_results, "stage_6_docker", "completed", "; ".join(docker_notes))
 
     problem_analysis = analyze_problem(main_desc)
@@ -2420,7 +2761,11 @@ def main():
         "stage_5_tests",
         "completed",
         "; ".join(
-            (["5A coverage complete", "5B fairness complete"] + (test_analysis["issues"][:2] or ["No major test fairness issues"]))
+            (
+                ["5A coverage complete", "5B fairness complete"]
+                + test_analysis.get("test_sh", {}).get("notes", [])[:2]
+                + (test_analysis["issues"][:2] or ["No major test fairness issues"])
+            )
         ),
     )
     solution_stats = solution_analysis.get("stats") or {}
@@ -2462,6 +2807,18 @@ def main():
             fixable_issues.append("New tests do not fail on base commit")
         if solution_patch_file and (not docker_results.get("solution_new_pass", False) or not docker_results.get("solution_base_pass", False)):
             fixable_issues.append("Tests do not pass with solution applied")
+        for label, run in docker_results.get("junit_runs", {}).items():
+            if not run.get("xml_present", True):
+                fixable_issues.append(f"JUnit XML missing for {label}")
+            elif not run.get("xml_valid", True):
+                fixable_issues.append(f"JUnit XML invalid for {label}: {run.get('xml_parse_error', 'parse failure')}")
+        pre_new = docker_results.get("junit_runs", {}).get("pre_new", {})
+        if pre_new.get("xml_valid") and (pre_new.get("xml_failures", 0) + pre_new.get("xml_errors", 0) <= 0):
+            fixable_issues.append("Pre-solution new-mode XML does not record any failures")
+        for label in ["post_base", "post_new"]:
+            run = docker_results.get("junit_runs", {}).get(label, {})
+            if run.get("xml_valid") and (run.get("xml_failures", 0) + run.get("xml_errors", 0) != 0):
+                fixable_issues.append(f"{label} XML still records failures after applying the solution")
     if rereview and rereview["incomplete"]:
         fixable_issues.append("Prior requested changes were not fully addressed")
     if rereview and rereview.get("new_issues"):

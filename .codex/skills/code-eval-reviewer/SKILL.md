@@ -107,7 +107,13 @@ Review the problem statement as a standalone engineering spec.
 ### Actions
 1. Score the 7 Problem checklist items from `references/creating-challenges.md`.
 2. Extract explicit contracts (`must` / `should` statements) and split combined requirements.
-3. Flag missing/implied contracts, ambiguous semantics, over-prescriptive schema/structure details, irrelevant context, and scope mismatches.
+3. Read `references/problem-description-review.md` and flag:
+   - repo-external framing
+   - checklist or rigid-section writing
+   - discoverable repo detail leakage
+   - code-fragment-heavy wording where plain English would be clearer
+   - AI-slop or filler language
+4. Flag missing/implied contracts, ambiguous semantics, over-prescriptive schema/structure details, irrelevant context, and scope mismatches.
 
 ### Decision Rules
 - `Request Changes`: any fixable problem-quality issue.
@@ -125,14 +131,21 @@ Ensure tests are complete, fair, behavioral, and actually aligned with the writt
 
 ### Actions
 1. Score the 8 Tests checklist items from `references/creating-challenges.md`.
-2. Run subpass `5A: Spec -> Test coverage`.
+2. Read `references/test-sh-junit-review.md`.
+3. Review `test.sh` statically:
+   - confirm it accepts `--output_path <path>` and exactly one mode, `base` or `new`
+   - confirm it writes JUnit XML to the requested path
+   - prefer native JUnit reporters; allow standard converters such as `tap-xunit`; reject hand-rolled XML generation
+   - confirm failure paths still produce XML
+   - if base mode excludes tests, require concrete reasons and verify the exclusions do not hide the touched area
+4. Run subpass `5A: Spec -> Test coverage`.
    - Build an explicit `Spec Requirement -> Covered by Test(s) -> Status` table.
    - Flag untested requirements.
-3. Run subpass `5B: Test -> Spec fairness`.
+5. Run subpass `5B: Test -> Spec fairness`.
    - Build an explicit `Test Assertion -> Traces to Spec Requirement -> Status` table.
    - Ask: could a partial or wrong implementation still pass?
    - For complex/stateful/merge-like behavior, ask whether the tests cover enough scenarios to rule out workaround or partially complete implementations.
-4. Flag:
+6. Flag:
    - hidden requirements
    - stronger-than-spec expectations
    - representation-choice assertions (shape, ordering, normalization, canonicalization, inlining, flattening, exact counts)
@@ -140,7 +153,7 @@ Ensure tests are complete, fair, behavioral, and actually aligned with the writt
    - loopholes that would allow workaround or partially complete implementations to pass
    - undocumented or hard-to-discover API/configuration requirements
    - internal leakage assertions
-5. Apply a conservative public-surface/discoverability audit:
+7. Apply a conservative public-surface/discoverability audit:
    - only flag if the evidence suggests the requirement is genuinely hard to infer from the problem and repo surface
    - distinguish documented public API from merely available implementation details
 
@@ -164,10 +177,14 @@ Confirm the submission behaves correctly in the required offline environment.
 ### Actions
 1. Use the commands in `references/docker-commands.md`.
 2. Verify:
-   - base tests pass on base commit
-   - new tests fail before solution
-   - base tests pass with solution
-   - new tests pass with solution
+   - `./test.sh --output_path <path> base` passes on the base commit
+   - `./test.sh --output_path <path> new` fails before the solution
+   - `./test.sh --output_path <path> base` passes with the solution
+   - `./test.sh --output_path <path> new` passes with the solution
+   - each run writes a non-empty, parseable JUnit XML file
+   - the pre-solution `new` XML records failures
+   - the post-solution XML files record zero failures
+   - missing XML on any run is a blocker, even if the exit code looks correct
 3. If `git apply --check` fails only due to CRLF line endings in patch files, normalize patch files to LF and retry. Treat this as environment normalization, not a submission issue.
 
 ### Decision Rules
@@ -178,6 +195,7 @@ Confirm the submission behaves correctly in the required offline environment.
 - Build result
 - Pre-solution test results
 - Post-solution test results
+- JUnit XML results for each run
 - Whether CRLF normalization was needed
 
 ## Stage 7: Solution Audit
@@ -294,6 +312,8 @@ P3:
 ## References
 
 - `references/creating-challenges.md` - Hard requirements and checklists (7/8/6)
+- `references/problem-description-review.md` - Natural prompt review rules
+- `references/test-sh-junit-review.md` - `test.sh` and JUnit review rules
 - `references/reviewer-rubric-2026.md` - Quality score rubric (1-7)
 - `references/feedback-template.md` - Exact output structure
 - `references/allowed-licenses.md` - Permissive license list
